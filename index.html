@@ -6,6 +6,172 @@
     <title>Website Subpage Scraper & Screenshotter</title>
     <!-- Tailwind CSS CDN for easy styling -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, query, orderBy, onSnapshot, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase configuration (will be provided by Canvas runtime)
+        // IMPORTANT CHANGE: Provide a dummy config for local testing if __firebase_config is undefined
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : JSON.stringify({
+            apiKey: "dummy-api-key", // Dummy key for local testing
+            authDomain: "dummy-project.firebaseapp.com",
+            projectId: "dummy-project-id",
+            storageBucket: "dummy-project-id.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:1234567890:web:abcdef1234567890abcdef"
+        }));
+        
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let currentUserId = null; // To store the authenticated user ID
+        let isAuthReady = false; // Flag to indicate if auth state is ready
+
+        // Authenticate user
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUserId = user.uid;
+                console.log("Firebase authenticated. User ID:", currentUserId);
+            } else {
+                console.log("No user signed in. Attempting authentication...");
+                try {
+                    // Always try custom token first if available (provided by Canvas for authenticated users)
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        currentUserId = auth.currentUser.uid;
+                        console.log("Signed in with custom token. User ID:", currentUserId);
+                    } else {
+                        // If no custom token, or if previous custom token sign-in failed/wasn't attempted, try anonymous sign-in
+                        await signInAnonymously(auth);
+                        currentUserId = auth.currentUser.uid;
+                        console.log("Signed in anonymously. User ID:", currentUserId);
+                    }
+                } catch (error) {
+                    console.error("Firebase authentication (custom token/initial anonymous) error:", error);
+                    // As a final fallback, use a random UUID if all authentication methods fail
+                    currentUserId = crypto.randomUUID();
+                    console.warn("Using random UUID as User ID due to authentication failure:", currentUserId);
+                }
+            }
+            isAuthReady = true; // Auth state is now known
+            document.getElementById('currentUserIdDisplay').textContent = `Your User ID: ${currentUserId}`;
+            document.getElementById('userIdInput').value = currentUserId; // Pre-fill hidden input
+            document.getElementById('scrapeForm').classList.remove('hidden'); // Show form once auth is ready
+        });
+
+
+        document.getElementById('scrapeForm').addEventListener('submit', async function(event) {
+            event.preventDefault(); // Prevent default form submission
+
+            if (!isAuthReady || !currentUserId) {
+                showMessage('Authentication not ready. Please wait.', 'error');
+                return;
+            }
+
+            let urlInput = document.getElementById('url').value.trim(); // Trim whitespace
+            const emailInput = document.getElementById('email').value;
+            const userIdInput = document.getElementById('userIdInput').value;
+
+            // Prepend protocol if missing
+            if (!urlInput.startsWith('http://') && !urlInput.startsWith('https://')) {
+                urlInput = 'https://' + urlInput; // Default to https
+            }
+
+            // Basic validation for non-empty URL after prepending
+            if (!urlInput || !emailInput || !userIdInput) {
+                showMessage('Please enter a valid website URL, your email, and ensure User ID is available.', 'error');
+                return;
+            }
+
+
+            // Clear previous messages and output
+            messageBox.style.display = 'none';
+            messageBox.className = 'message-box';
+            outputContentDiv.innerHTML = '';
+            currentJobIdDisplay.textContent = 'N/A';
+            jobResultsSection.classList.add('hidden'); // Hide results until a job starts
+
+            showMessage('Initiating scraping job...', 'success');
+
+            // IMPORTANT: Replaced placeholder with your actual backend serverless function URL
+            const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot'; 
+
+            try {
+                const response = await fetch(backendApiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url: urlInput, email: emailInput, userId: userIdInput }),
+                });
+
+                const result = await response.json();
+
+                if (response.status === 202) { // 202 Accepted, indicating job started
+                    const jobId = result.jobId;
+                    const returnedUserId = result.userId; 
+                    showMessage(`Scraping job started (ID: ${jobId}). Results will appear below as they are processed.`, 'success');
+                    currentJobIdDisplay.textContent = jobId;
+                    jobResultsSection.classList.remove('hidden'); 
+
+                    // Start listening to Firestore for results for this jobId
+                    const q = query(collection(db, `artifacts/${appId}/users/${returnedUserId}/scrape_results/${jobId}/pages`), orderBy('timestamp'));
+
+                    onSnapshot(q, (snapshot) => {
+                        snapshot.docChanges().forEach((change) => {
+                            if (change.type === "added") {
+                                const data = change.doc.data();
+                                const pageDiv = document.createElement('div');
+                                pageDiv.className = 'p-3 border-b border-gray-200 last:border-b-0';
+                                pageDiv.innerHTML = `
+                                    <h3 class="font-semibold text-gray-800">${data.originalUrl}</h3>
+                                    <p class="text-sm text-gray-600 mt-1">
+                                        <a href="${data.htmlUrl}" target="_blank" class="text-blue-600 hover:underline">View HTML</a> | 
+                                        <a href="${data.screenshotUrl}" target="_blank" class="text-blue-600 hover:underline">View Screenshot</a>
+                                    </p>
+                                    <p class="text-xs text-gray-500 mt-1">Processed: ${data.timestamp ? data.timestamp.toDate().toLocaleString() : 'N/A'}</p>
+                                    <p class="text-xs text-gray-500">File Name: ${data.fileName}.jpeg/.html</p>
+                                `;
+                                outputContentDiv.prepend(pageDiv); 
+                            }
+                        });
+                    }, (error) => {
+                        console.error("Error listening to Firestore:", error);
+                        showMessage("Error fetching real-time results. Check console for details.", 'error');
+                    });
+
+                } else {
+                    showMessage(result.error || 'An unexpected error occurred when starting the job.', 'error');
+                }
+            } catch (error) {
+                showMessage('Network error or server unreachable. Please ensure your Cloud Function is deployed and accessible.', 'error');
+                console.error('Fetch error:', error);
+            }
+        });
+
+        function showMessage(text, type) {
+            const messageBox = document.getElementById('messageBox');
+            messageBox.classList.remove('success', 'error');
+            messageBox.classList.add(type);
+            messageBox.textContent = text;
+            messageBox.style.display = 'block';
+        }
+
+        // Expose Firebase and userId globally for debugging if needed, but primarily used within module
+        window.app = app;
+        window.auth = auth;
+        window.db = db;
+        window.currentUserId = currentUserId; 
+        window.appId = appId;
+    </script>
     <style>
         /* Custom styles for the Inter font and general layout */
         body {
@@ -15,6 +181,7 @@
             align-items: center;
             min-height: 100vh;
             background-color: #f0f4f8; /* Light background */
+            padding: 1rem; /* Added padding for small screens */
         }
         .container {
             background-color: #ffffff;
@@ -22,7 +189,7 @@
             border-radius: 1rem; /* Rounded corners */
             box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* Subtle shadow */
             max-width: 90%; /* Responsive width */
-            width: 500px; /* Max width for larger screens */
+            width: 700px; /* Max width for larger screens */
         }
         /* Style for the message box */
         .message-box {
@@ -42,23 +209,30 @@
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Website Subpage Scraper</h1>
-        <p class="text-center text-gray-600 mb-8">
-            Enter a website URL and your email. We'll crawl the site, take screenshots of subpages, and email them to you.
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-4">Website Subpage Scraper</h1>
+        <p class="text-center text-gray-600 mb-6">
+            Enter a website URL and your email. We'll crawl the site, take screenshots of subpages, and show results in real-time.
         </p>
 
-        <form id="scrapeForm" class="space-y-4">
+        <p id="currentUserIdDisplay" class="text-sm text-gray-500 text-center mb-4">Initializing user...</p>
+
+        <form id="scrapeForm" class="space-y-4 hidden"> <!-- Hidden until Firebase auth is ready -->
+            <input type="hidden" id="userIdInput" name="userId"> <!-- Hidden input for userId -->
             <div>
                 <label for="url" class="block text-sm font-medium text-gray-700 mb-1">Website URL:</label>
+                <!-- IMPORTANT CHANGE: Changed type from "url" to "text" -->
                 <input
-                    type="url"
+                    type="text" 
                     id="url"
                     name="url"
-                    placeholder="e.g., https://www.example.com"
+                    placeholder="e.g., example.com or https://example.com"
                     required
                     class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 >
@@ -71,7 +245,7 @@
                     name="email"
                     placeholder="e.g., yourname@example.com"
                     required
-                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                 >
             </div>
             <button
@@ -84,85 +258,14 @@
 
         <div id="messageBox" class="message-box"></div>
 
-        <div id="testOutput" class="mt-8 p-4 bg-gray-100 rounded-lg hidden">
-            <h2 class="text-xl font-semibold mb-4 text-gray-700">Test Output Links:</h2>
-            <div id="outputContent" class="space-y-2">
-                <!-- Links to fetched HTML and screenshots will appear here for testing -->
+        <div id="jobResultsSection" class="mt-8 p-4 bg-gray-50 rounded-lg border border-gray-200 hidden">
+            <h2 class="text-xl font-semibold mb-3 text-gray-800">Job Results:</h2>
+            <p class="text-sm text-gray-600 mb-4">Job ID: <span id="currentJobIdDisplay" class="font-mono">N/A</span></p>
+            <div id="outputContent" class="space-y-4 max-h-96 overflow-y-auto">
+                <!-- Results will appear here dynamically -->
+                <p class="text-gray-500 text-sm">Results will load here in real-time as pages are processed.</p>
             </div>
         </div>
     </div>
-
-    <script>
-        document.getElementById('scrapeForm').addEventListener('submit', async function(event) {
-            event.preventDefault(); // Prevent default form submission
-
-            const urlInput = document.getElementById('url').value;
-            const emailInput = document.getElementById('email').value;
-            const messageBox = document.getElementById('messageBox');
-            const testOutputDiv = document.getElementById('testOutput');
-            const outputContentDiv = document.getElementById('outputContent');
-
-            // Clear previous messages and output
-            messageBox.style.display = 'none';
-            messageBox.className = 'message-box';
-            outputContentDiv.innerHTML = '';
-            testOutputDiv.classList.add('hidden');
-
-            // Show a loading message
-            messageBox.classList.add('success'); // Using success style for initial loading feedback
-            messageBox.textContent = 'Processing your request... This may take a few moments.';
-            messageBox.style.display = 'block';
-
-            // IMPORTANT: Replace this with your actual backend serverless function URL
-            // This is where your frontend will send the URL and email to the backend.
-            const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot';
-
-            try {
-                const response = await fetch(backendApiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ url: urlInput, email: emailInput }),
-                });
-
-                const result = await response.json();
-
-                if (response.ok) {
-                    messageBox.classList.remove('error');
-                    messageBox.classList.add('success');
-                    messageBox.textContent = result.message || 'Request submitted successfully! Check your email (or see test output).';
-
-                    // For testing purposes, display links if the backend returns them
-                    if (result.htmlFiles && result.htmlFiles.length > 0) {
-                        testOutputDiv.classList.remove('hidden');
-                        outputContentDiv.innerHTML += '<h3 class="font-bold text-gray-700 mt-4 mb-2">HTML Files:</h3>';
-                        result.htmlFiles.forEach(file => {
-                            outputContentDiv.innerHTML += `<a href="${file.url}" target="_blank" class="block text-blue-600 hover:underline">${file.name}</a>`;
-                        });
-                    }
-                    if (result.screenshotFiles && result.screenshotFiles.length > 0) {
-                        testOutputDiv.classList.remove('hidden');
-                        outputContentDiv.innerHTML += '<h3 class="font-bold text-gray-700 mt-4 mb-2">Screenshots:</h3>';
-                        result.screenshotFiles.forEach(file => {
-                            outputContentDiv.innerHTML += `<a href="${file.url}" target="_blank" class="block text-blue-600 hover:underline">${file.name}</a>`;
-                        });
-                    }
-
-                } else {
-                    messageBox.classList.remove('success');
-                    messageBox.classList.add('error');
-                    messageBox.textContent = result.error || 'An error occurred while processing your request.';
-                }
-            } catch (error) {
-                messageBox.classList.remove('success');
-                messageBox.classList.add('error');
-                messageBox.textContent = 'Network error or server unreachable. Please try again later.';
-                console.error('Fetch error:', error);
-            } finally {
-                messageBox.style.display = 'block';
-            }
-        });
-    </script>
 </body>
 </html>
