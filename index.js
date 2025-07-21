@@ -1,26 +1,155 @@
-// index.js - Google Cloud Function for Website Scraping and Screenshotting
+// index.js - Secure Google Cloud Function for Website Scraping and Screenshotting
 
 // Import necessary Google Cloud libraries
 const { Storage } = require('@google-cloud/storage');
-const { Firestore } = require('@google-cloud/firestore'); // Import Firestore
 
 // Import Puppeteer-core and @sparticuz/chromium
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 
-// Import Firebase Admin SDK for initializing Firestore in the server environment
-const admin = require('firebase-admin');
-
 // Initialize Google Cloud Storage client
 const storage = new Storage();
 
 // IMPORTANT: Updated with your provided bucket name.
-const BUCKET_NAME = 'website-screenshots-by-labratorium'; 
+const BUCKET_NAME = 'website-screenshots-by-labratorium';
 
-// Initialize Firebase Admin SDK (for Firestore access)
-// Use default credentials when running in Google Cloud Functions environment
-admin.initializeApp();
-const db = admin.firestore(); // Initialize Firestore
+// Security and resource constraints
+const MAX_PAGES_TO_CRAWL = 25; // Reduced from 50 for security
+const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024; // 10MB limit
+const MAX_HTML_SIZE = 5 * 1024 * 1024; // 5MB limit
+const MAX_EXECUTION_TIME = 300000; // 5 minutes
+const MAX_URL_LENGTH = 2048; // Maximum URL length
+const MAX_EMAIL_LENGTH = 254; // Maximum email length
+
+/**
+ * Validates URL for security (SSRF protection)
+ * @param {string} urlString The URL to validate
+ * @returns {string} The validated URL
+ * @throws {Error} If URL is invalid or poses security risk
+ */
+function validateUrl(urlString) {
+    if (!urlString || typeof urlString !== 'string') {
+        throw new Error('URL is required and must be a string');
+    }
+    
+    if (urlString.length > MAX_URL_LENGTH) {
+        throw new Error('URL is too long');
+    }
+    
+    try {
+        const url = new URL(urlString);
+        
+        // Only allow HTTP/HTTPS protocols
+        if (!['http:', 'https:'].includes(url.protocol)) {
+            throw new Error('Only HTTP and HTTPS protocols are allowed');
+        }
+        
+        // Block private/internal networks (SSRF protection)
+        const hostname = url.hostname.toLowerCase();
+        
+        // Block localhost variations
+        if (['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(hostname) ||
+            hostname.startsWith('192.168.') ||
+            hostname.startsWith('10.') ||
+            hostname.startsWith('172.16.') ||
+            hostname.startsWith('172.17.') ||
+            hostname.startsWith('172.18.') ||
+            hostname.startsWith('172.19.') ||
+            hostname.match(/^172\.(2[0-9]|3[01])\./) ||
+            hostname.includes('metadata.google.internal') ||
+            hostname.includes('metadata') ||
+            hostname === '169.254.169.254') {
+            throw new Error('Private/internal network access is not allowed');
+        }
+        
+        // Block dangerous ports
+        const dangerousPorts = [22, 23, 25, 53, 110, 143, 993, 995, 3306, 5432, 6379, 27017];
+        if (url.port && dangerousPorts.includes(parseInt(url.port))) {
+            throw new Error('Access to this port is not allowed');
+        }
+        
+        // Additional hostname validation
+        if (hostname.includes('..') || hostname.startsWith('.') || hostname.endsWith('.')) {
+            throw new Error('Invalid hostname format');
+        }
+        
+        return url.toString();
+    } catch (error) {
+        if (error.message.includes('Invalid URL')) {
+            throw new Error('Invalid URL format');
+        }
+        throw error;
+    }
+}
+
+/**
+ * Validates email address
+ * @param {string} email The email to validate
+ * @returns {string} The validated and normalized email
+ * @throws {Error} If email is invalid
+ */
+function validateEmail(email) {
+    if (!email || typeof email !== 'string') {
+        throw new Error('Email is required and must be a string');
+    }
+    
+    const trimmedEmail = email.trim();
+    
+    if (trimmedEmail.length > MAX_EMAIL_LENGTH) {
+        throw new Error('Email address is too long');
+    }
+    
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmedEmail)) {
+        throw new Error('Invalid email format');
+    }
+    
+    // Additional security checks
+    if (trimmedEmail.includes('..') || trimmedEmail.startsWith('.') || trimmedEmail.endsWith('.')) {
+        throw new Error('Invalid email format');
+    }
+    
+    return trimmedEmail.toLowerCase();
+}
+
+/**
+ * Sanitizes filename to prevent path traversal and other issues
+ * @param {string} input The input string to sanitize
+ * @returns {string} The sanitized filename
+ */
+function sanitizeFileName(input) {
+    if (!input || typeof input !== 'string') {
+        return 'unnamed';
+    }
+    
+    return input
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '') // Remove dangerous chars
+        .replace(/\.+/g, '-') // Replace dots with hyphens
+        .replace(/\s+/g, '-') // Replace spaces with hyphens
+        .replace(/--+/g, '-') // Replace multiple hyphens with single
+        .replace(/^-+|-+$/g, '') // Remove leading/trailing hyphens
+        .substring(0, 100) // Limit length
+        .toLowerCase(); // Normalize case
+}
+
+/**
+ * Creates a safe error response without sensitive information
+ * @param {string} message Safe error message for user
+ * @param {Error} originalError Original error for logging
+ * @returns {Object} Safe error response
+ */
+function createSafeError(message, originalError = null) {
+    // Log full error for debugging
+    if (originalError) {
+        console.error('Full error details:', originalError);
+    }
+    
+    // Return sanitized error to user
+    return {
+        error: message,
+        timestamp: new Date().toISOString()
+    };
+}
 
 /**
  * Normalizes a URL to ensure consistent comparison and filename generation.
@@ -86,124 +215,104 @@ function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// List of common third-party domains to block to speed up page loading and reduce memory usage.
+// Enhanced list of blocked domains for security and performance
 const BLOCKED_DOMAINS = [
+    // Analytics & Tracking
     'google-analytics.com', 'googletagmanager.com', 'googlesyndication.com', 'googleadservices.com',
     'doubleclick.net', 'adservice.google.com', 'ads.google.com', 'ad.doubleclick.net',
-    'facebook.com/tr', 'facebook.net', 'fbq.js', 'connect.facebook.net', // Facebook pixel/SDK
-    'hotjar.com', 'static.hotjar.com', // Heatmap/analytics
-    'clarity.ms', // Microsoft Clarity
-    'linkedin.com/analytics', 'licdn.com', // LinkedIn analytics/tracking
-    'pixel.cookielaw.com', 'cookielaw.org', // Cookie consent tracking
-    'analytics.google.com', 'g.doubleclick.net', 'stats.g.doubleclick.net',
-    'sentry.io', // Error tracking
-    'segment.io', // Customer data platform
-    'intercom.io', // Chat/support widgets
-    'fullstory.com', // Session replay
-    'newrelic.com', // Performance monitoring
-    'cloudflareinsights.com', // Cloudflare analytics
-    'onesignal.com', // Push notifications
-    'crisp.chat', // Chat widget
-    'drift.com', // Chat widget
-    'freshchat.com', // Chat widget
-    'zendesk.com', // Support widget
-    'vimeo.com/api', 'youtube.com/api', // Video APIs if not crucial for screenshot
-    'maps.google.com', 'maps.googleapis.com', // Google Maps APIs
-    'fonts.googleapis.com', 'fonts.gstatic.com', // Google Fonts (can be blocked if not critical to layout)
-    'cdn.jsdelivr.net', 'cdnjs.cloudflare.com', // Common CDNs (can contain various scripts, block selectively if impacting)
-    'use.typekit.net', // Adobe Fonts
-    'stripe.com', 'paypal.com', // Payment processors (often load scripts)
-    'platform.twitter.com', 'platform.linkedin.com', 'platform.instagram.com', // Social media widgets
-    'gravatar.com', // User avatars
-    'googletagservices.com',
-    'cdn.taboola.com', 'cdn.outbrain.com', // Content recommendation engines
-    'bing.com/analytics', 'bat.bing.com' // Bing analytics
+    'facebook.com/tr', 'facebook.net', 'fbq.js', 'connect.facebook.net',
+    'hotjar.com', 'static.hotjar.com', 'clarity.ms', 'linkedin.com/analytics', 'licdn.com',
+    'pixel.cookielaw.com', 'cookielaw.org', 'analytics.google.com', 'g.doubleclick.net', 
+    'stats.g.doubleclick.net', 'segment.io', 'fullstory.com', 'cloudflareinsights.com',
+    
+    // Ads & Marketing
+    'taboola.com', 'outbrain.com', 'cdn.taboola.com', 'cdn.outbrain.com', 'adsystem.com',
+    'bing.com/analytics', 'bat.bing.com',
+    
+    // Chat & Support Widgets
+    'intercom.io', 'crisp.chat', 'drift.com', 'freshchat.com', 'zendesk.com',
+    
+    // Other Services
+    'sentry.io', 'newrelic.com', 'onesignal.com', 'gravatar.com', 'googletagservices.com',
+    'use.typekit.net', 'stripe.com', 'paypal.com', 'platform.twitter.com', 
+    'platform.linkedin.com', 'platform.instagram.com',
+    
+    // Security: Block metadata and internal services
+    'metadata.google.internal', 'metadata', '169.254.169.254', 'localhost'
 ];
 
-// IMPORTANT: New list for excluding policy/terms/privacy pages
+// Keywords to exclude policy/terms/privacy pages
 const EXCLUDED_URL_KEYWORDS = [
-    'privacy-policy',
-    'privacy',
-    'terms-of-service',
-    'terms',
-    'legal',
-    'disclaimer',
-    'cookie-policy',
-    'gdpr',
-    'ccpa'
-    // Add more keywords as needed, e.g., 'about-us' if you want to exclude that too
+    'privacy-policy', 'privacy', 'terms-of-service', 'terms', 'legal', 'disclaimer',
+    'cookie-policy', 'gdpr', 'ccpa', 'terms-and-conditions', 'privacy-notice'
 ];
 
 /**
- * Entry point for the Cloud Function.
- * This function will be triggered by an HTTP POST request from your frontend.
- *
- * @param {object} req The HTTP request object.
- * @param {object} res The HTTP response object.
+ * Main scraping function with timeout protection
+ * @param {object} req The HTTP request object
+ * @param {object} res The HTTP response object
  */
-exports.scrapeAndScreenshot = async (req, res) => {
-    // Set CORS headers for the response
-    res.set('Access-Control-Allow-Origin', '*'); 
+async function performScraping(req, res) {
+    // Extract and validate inputs
+    const { url, email } = req.body;
 
-    if (req.method === 'OPTIONS') {
-        res.set('Access-Control-Allow-Methods', 'POST'); 
-        res.set('Access-Control-Allow-Headers', 'Content-Type'); 
-        res.set('Access-Control-Max-Age', '3600'); 
-        return res.status(204).send('');
+    if (!url || !email) {
+        console.error('Missing URL or Email in request body.');
+        return res.status(400).json(createSafeError('Website URL and Email are required.'));
     }
 
-    // Extract URL, email, and optionally userId from the request body
-    const { url, email, userId } = req.body; 
-
-    // Basic input validation
-    if (!url || !email || !userId) { 
-        console.error('Missing URL, Email, or UserId in request body.');
-        return res.status(400).json({ error: 'Website URL, Email, and User ID are required.' });
+    // Validate URL for security (SSRF protection)
+    let validatedUrl;
+    try {
+        validatedUrl = validateUrl(url);
+    } catch (error) {
+        console.error(`URL validation failed: ${error.message}`);
+        return res.status(400).json(createSafeError(error.message));
     }
 
-    console.log(`Received request for URL: ${url}, Email: ${email}, UserId: ${userId}`);
+    // Validate email
+    let validatedEmail;
+    try {
+        validatedEmail = validateEmail(email);
+    } catch (error) {
+        console.error(`Email validation failed: ${error.message}`);
+        return res.status(400).json(createSafeError(error.message));
+    }
 
-    let browser = null; 
-    const visitedUrls = new Set(); 
-    const pagesToVisit = [normalizeUrl(url)]; 
+    console.log(`Received validated request for URL: ${validatedUrl}, Email: ${validatedEmail}`);
 
-    // Generate a unique Job ID for this scraping task
-    const jobId = `scrape_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    let browser = null;
+    const visitedUrls = new Set();
+    const pagesToVisit = [normalizeUrl(validatedUrl)];
 
-    // Define the Firestore collection path for this job's results
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const jobResultsCollectionRef = db.collection(`artifacts/${appId}/users/${userId}/scrape_results`).doc(jobId).collection('pages');
-
-    // Respond immediately to the frontend with the jobId, so it can start listening for updates.
-    res.status(202).json({ 
-        message: 'Scraping job started. Please monitor results via job ID.',
-        jobId: jobId,
-        userId: userId 
-    });
-
-    const MAX_PAGES_TO_CRAWL = 50; 
+    // Arrays to store results for the final response
+    const screenshotFiles = [];
+    const htmlFiles = [];
 
     try {
+        console.log('[DEBUG] Attempting to launch Puppeteer browser...');
         browser = await puppeteer.launch({
-            args: [...chromium.args, '--disable-gpu'], 
-            defaultViewport: { width: 1920, height: 1080 }, 
+            args: [...chromium.args, '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage'],
+            defaultViewport: { width: 1920, height: 1080 },
             executablePath: await chromium.executablePath(),
             headless: chromium.headless,
+            timeout: 60000
         });
+        console.log('[DEBUG] Puppeteer browser launched successfully.');
 
         // Loop through pages to visit
         while (pagesToVisit.length > 0 && visitedUrls.size < MAX_PAGES_TO_CRAWL) {
-            const currentUrl = pagesToVisit.shift(); 
-            const normalizedCurrentUrl = normalizeUrl(currentUrl); 
+            const currentUrl = pagesToVisit.shift();
+            const normalizedCurrentUrl = normalizeUrl(currentUrl);
 
             try {
-                new URL(normalizedCurrentUrl); 
+                new URL(normalizedCurrentUrl);
             } catch (e) {
                 console.warn(`Invalid URL skipped: ${normalizedCurrentUrl}`);
                 continue;
             }
 
-            // --- IMPORTANT CHANGE HERE: Exclude policy/terms pages ---
+            // Check for excluded keywords
             const urlPath = new URL(normalizedCurrentUrl).pathname.toLowerCase();
             const urlHostname = new URL(normalizedCurrentUrl).hostname.toLowerCase();
             let shouldExclude = false;
@@ -216,35 +325,44 @@ exports.scrapeAndScreenshot = async (req, res) => {
 
             if (shouldExclude) {
                 console.log(`Skipping excluded page: ${normalizedCurrentUrl} (contains policy/terms keyword).`);
-                visitedUrls.add(normalizedCurrentUrl); // Still mark as visited to avoid re-processing
-                continue; // Skip to the next URL
+                visitedUrls.add(normalizedCurrentUrl);
+                continue;
             }
-            // --- End IMPORTANT CHANGE ---
 
             if (visitedUrls.has(normalizedCurrentUrl)) {
                 console.log(`Already visited (normalized): ${normalizedCurrentUrl}. Skipping.`);
                 continue;
             }
 
-            visitedUrls.add(normalizedCurrentUrl); 
+            visitedUrls.add(normalizedCurrentUrl);
             console.log(`Navigating to: ${normalizedCurrentUrl} (Pages visited: ${visitedUrls.size}/${MAX_PAGES_TO_CRAWL})`);
 
-            let page = null; 
+            let page = null;
             try {
-                page = await browser.newPage(); 
-                page.setDefaultNavigationTimeout(120000); 
+                console.log(`[DEBUG] Creating new page for ${normalizedCurrentUrl}...`);
+                page = await browser.newPage();
+                page.setDefaultNavigationTimeout(120000);
 
+                // Enhanced request interception for security
                 await page.setRequestInterception(true);
                 page.on('request', (req) => {
                     const resourceType = req.resourceType();
-                    const url = req.url();
+                    const requestUrl = req.url();
 
-                    if (['font', 'media', 'manifest', 'other'].includes(resourceType)) {
+                    // Block dangerous resource types
+                    if (['font', 'media', 'manifest', 'other', 'websocket'].includes(resourceType)) {
                         req.abort();
                         return;
                     }
-                    
-                    if (BLOCKED_DOMAINS.some(domain => url.includes(domain))) {
+
+                    // Block non-HTTP protocols in requests
+                    if (!requestUrl.startsWith('http://') && !requestUrl.startsWith('https://')) {
+                        req.abort();
+                        return;
+                    }
+
+                    // Block known dangerous domains
+                    if (BLOCKED_DOMAINS.some(domain => requestUrl.includes(domain))) {
                         req.abort();
                         return;
                     }
@@ -252,19 +370,34 @@ exports.scrapeAndScreenshot = async (req, res) => {
                     req.continue();
                 });
 
-                await page.goto(normalizedCurrentUrl, { waitUntil: ['domcontentloaded', 'load'], timeout: 120000 });
+                console.log(`[DEBUG] Navigating to ${normalizedCurrentUrl}...`);
+                const navigationPromise = page.waitForNavigation({ 
+                    waitUntil: ['domcontentloaded', 'load'], 
+                    timeout: 120000 
+                });
                 
+                await Promise.all([
+                    navigationPromise,
+                    page.goto(normalizedCurrentUrl, { 
+                        waitUntil: ['domcontentloaded', 'load'], 
+                        timeout: 120000 
+                    })
+                ]);
+                console.log(`[DEBUG] Page ${normalizedCurrentUrl} loaded and settled.`);
+
+                // Controlled scrolling
                 let lastScrollHeight = 0;
                 let scrollAttempts = 0;
-                const maxScrollAttempts = 10; 
+                const maxScrollAttempts = 5; // Reduced for security
 
+                console.log(`[DEBUG] Starting scroll for ${normalizedCurrentUrl}...`);
                 while (scrollAttempts < maxScrollAttempts) {
                     const newScrollHeight = await page.evaluate(() => {
-                        window.scrollBy(0, window.innerHeight); 
+                        window.scrollBy(0, window.innerHeight);
                         return document.documentElement.scrollHeight;
                     });
 
-                    await delay(500); 
+                    await delay(1000);
 
                     if (newScrollHeight === lastScrollHeight) {
                         break;
@@ -273,99 +406,12 @@ exports.scrapeAndScreenshot = async (req, res) => {
                     scrollAttempts++;
                 }
                 await page.evaluate(() => window.scrollTo(0, 0));
-                await delay(1000); 
+                await delay(2000);
+                console.log(`[DEBUG] Scroll completed for ${normalizedCurrentUrl}.`);
 
-                const perceivedScrollHeight = await page.evaluate(() => document.documentElement.scrollHeight);
-                console.log(`[Diagnostic] Page ${normalizedCurrentUrl} perceived scrollHeight: ${perceivedScrollHeight}px`);
-
-                const now = new Date();
-                const timestamp = now.getFullYear().toString() +
-                                  (now.getMonth() + 1).toString().padStart(2, '0') +
-                                  now.getDate().toString().padStart(2, '0') +
-                                  now.getHours().toString().padStart(2, '0') +
-                                  now.getMinutes().toString().padStart(2, '0') +
-                                  now.getSeconds().toString().padStart(2, '0');
-
-                const urlObj = new URL(normalizedCurrentUrl);
-                let fullPath = urlObj.hostname + urlObj.pathname;
-                
-                if (fullPath.endsWith('/') && fullPath !== urlObj.hostname + '/') {
-                    fullPath = fullPath.slice(0, -1);
-                }
-
-                let baseNameFromUrl = fullPath.replace(/\./g, '-').replace(/\//g, '-');
-
-                baseNameFromUrl = baseNameFromUrl.replace(/--+/g, '-');
-
-                baseNameFromUrl = baseNameFromUrl.replace(/^-+|-+$/g, '');
-
-                if (baseNameFromUrl.length === 0) {
-                    baseNameFromUrl = urlObj.hostname.replace(/\./g, '-');
-                }
-                if (normalizedCurrentUrl === normalizeUrl(urlObj.origin + '/')) { 
-                    baseNameFromUrl = urlObj.hostname.replace(/\./g, '-');
-                }
-                baseNameFromUrl = baseNameFromUrl.replace(/[^a-zA-Z0-9-]/g, '');
-
-                const fileNameBase = `${baseNameFromUrl}-${timestamp}`;
-
-                const htmlContent = await page.content();
-                const htmlFileName = `html/${fileNameBase}.html`;
-                const htmlFileRef = storage.bucket(BUCKET_NAME).file(htmlFileName);
-                await htmlFileRef.save(htmlContent, {
-                    contentType: 'text/html',
-                    public: true, 
-                });
-                const htmlPublicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${htmlFileName}`;
-                console.log(`Saved HTML for ${normalizedCurrentUrl} to: ${htmlPublicUrl}`);
-
-                const screenshotBuffer = await page.screenshot({
-                    type: 'jpeg',
-                    quality: 80, 
-                    fullPage: true, 
-                });
-                const screenshotFileName = `screenshots/${fileNameBase}.jpeg`;
-                const screenshotFileRef = storage.bucket(BUCKET_NAME).file(screenshotFileName);
-                await screenshotFileRef.save(screenshotBuffer, {
-                    contentType: 'image/jpeg',
-                    public: true, 
-                });
-                const screenshotPublicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${screenshotFileName}`;
-                console.log(`Saved screenshot for ${normalizedCurrentUrl} to: ${screenshotPublicUrl}`);
-
-                await jobResultsCollectionRef.add({
-                    originalUrl: normalizedCurrentUrl,
-                    htmlUrl: htmlPublicUrl,
-                    screenshotUrl: screenshotPublicUrl,
-                    timestamp: admin.firestore.FieldValue.serverTimestamp(), 
-                    fileName: fileNameBase
-                });
-                console.log(`Saved result for ${normalizedCurrentUrl} to Firestore.`);
-
-                await page.close(); 
-                console.log(`Page for ${normalizedCurrentUrl} closed.`);
-
-                const linksPage = await browser.newPage();
-                await linksPage.setRequestInterception(true);
-                linksPage.on('request', (req) => {
-                    const resourceType = req.resourceType();
-                    const url = req.url();
-                    
-                    if (['font', 'media', 'manifest', 'other'].includes(resourceType)) {
-                        req.abort();
-                        return;
-                    }
-
-                    if (BLOCKED_DOMAINS.some(domain => url.includes(domain))) {
-                        req.abort();
-                        return;
-                    }
-                    
-                    req.continue();
-                });
-
-                await linksPage.goto(normalizedCurrentUrl, { waitUntil: ['domcontentloaded', 'load'], timeout: 120000 }); 
-                const links = await linksPage.evaluate(() => {
+                // Extract links before taking screenshot
+                console.log(`[DEBUG] Extracting links from ${normalizedCurrentUrl}...`);
+                const links = await page.evaluate(() => {
                     const anchors = Array.from(document.querySelectorAll('a'));
                     let currentCanonicalHostname = window.location.hostname;
                     if (currentCanonicalHostname.startsWith('www.') && currentCanonicalHostname.length > 4 && currentCanonicalHostname.includes('.')) {
@@ -389,20 +435,93 @@ exports.scrapeAndScreenshot = async (req, res) => {
                                 return linkCanonicalHostname === currentCanonicalHostname &&
                                        !linkUrl.hash && !href.startsWith('mailto:') && !href.startsWith('tel:');
                             } catch (e) {
-                                return false; 
+                                return false;
                             }
                         });
                 });
-                await linksPage.close(); 
+                console.log(`[DEBUG] Links extracted from ${normalizedCurrentUrl}. Found ${links.length} links.`);
 
+                // Generate secure filename
+                const now = new Date();
+                const timestamp = now.getFullYear().toString() +
+                                  (now.getMonth() + 1).toString().padStart(2, '0') +
+                                  now.getDate().toString().padStart(2, '0') +
+                                  now.getHours().toString().padStart(2, '0') +
+                                  now.getMinutes().toString().padStart(2, '0') +
+                                  now.getSeconds().toString().padStart(2, '0');
 
+                const urlObj = new URL(normalizedCurrentUrl);
+                let fullPath = urlObj.hostname + urlObj.pathname;
+
+                if (fullPath.endsWith('/') && fullPath !== urlObj.hostname + '/') {
+                    fullPath = fullPath.slice(0, -1);
+                }
+
+                let baseNameFromUrl = sanitizeFileName(fullPath);
+                if (baseNameFromUrl.length === 0 || baseNameFromUrl === 'unnamed') {
+                    baseNameFromUrl = sanitizeFileName(urlObj.hostname);
+                }
+
+                if (normalizedCurrentUrl === normalizeUrl(urlObj.origin + '/')) {
+                    baseNameFromUrl = sanitizeFileName(urlObj.hostname);
+                }
+
+                const fileNameBase = sanitizeFileName(`${baseNameFromUrl}-${timestamp}`);
+
+                // Save HTML with size validation
+                console.log(`[DEBUG] Saving HTML for ${normalizedCurrentUrl}...`);
+                const htmlContent = await page.content();
+
+                // Validate HTML size
+                if (Buffer.byteLength(htmlContent, 'utf8') > MAX_HTML_SIZE) {
+                    console.warn(`HTML content too large for ${normalizedCurrentUrl}: ${Buffer.byteLength(htmlContent, 'utf8')} bytes. Skipping.`);
+                } else {
+                    const htmlFileName = `html/${fileNameBase}.html`;
+                    const htmlFileRef = storage.bucket(BUCKET_NAME).file(htmlFileName);
+                    await htmlFileRef.save(htmlContent, {
+                        contentType: 'text/html',
+                        public: true,
+                    });
+                    const htmlPublicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${htmlFileName}`;
+                    htmlFiles.push({ name: `${fileNameBase}.html`, url: htmlPublicUrl });
+                    console.log(`Saved HTML for ${normalizedCurrentUrl} to: ${htmlPublicUrl}`);
+                }
+
+                // Take screenshot with size validation
+                console.log(`[DEBUG] Taking screenshot for ${normalizedCurrentUrl}...`);
+                const screenshotBuffer = await page.screenshot({
+                    type: 'jpeg',
+                    quality: 80,
+                    fullPage: true,
+                });
+
+                // Validate screenshot size
+                if (screenshotBuffer.length > MAX_SCREENSHOT_SIZE) {
+                    console.warn(`Screenshot too large for ${normalizedCurrentUrl}: ${screenshotBuffer.length} bytes. Skipping.`);
+                } else {
+                    const screenshotFileName = `screenshots/${fileNameBase}.jpeg`;
+                    const screenshotFileRef = storage.bucket(BUCKET_NAME).file(screenshotFileName);
+                    await screenshotFileRef.save(screenshotBuffer, {
+                        contentType: 'image/jpeg',
+                        public: true,
+                    });
+                    const screenshotPublicUrl = `https://storage.googleapis.com/${BUCKET_NAME}/${screenshotFileName}`;
+                    screenshotFiles.push({ name: `${fileNameBase}.jpeg`, url: screenshotPublicUrl });
+                    console.log(`Saved screenshot for ${normalizedCurrentUrl} to: ${screenshotPublicUrl}`);
+                }
+
+                // Close page
+                await page.close();
+                console.log(`Page for ${normalizedCurrentUrl} closed.`);
+
+                // Process extracted links
                 links.forEach(link => {
-                    if (visitedUrls.size < MAX_PAGES_TO_CRAWL) { 
+                    if (visitedUrls.size < MAX_PAGES_TO_CRAWL) {
                         const normalizedLink = normalizeUrl(link);
-                        // Exclude identified policy/terms pages from further crawling as well
                         const normalizedLinkPath = new URL(normalizedLink).pathname.toLowerCase();
                         const normalizedLinkHostname = new URL(normalizedLink).hostname.toLowerCase();
                         let isExcludedLink = false;
+                        
                         for (const keyword of EXCLUDED_URL_KEYWORDS) {
                             if (normalizedLinkPath.includes(keyword) || normalizedLinkHostname.includes(keyword)) {
                                 isExcludedLink = true;
@@ -423,18 +542,93 @@ exports.scrapeAndScreenshot = async (req, res) => {
             } catch (pageError) {
                 console.error(`Error processing page ${normalizedCurrentUrl}:`, pageError.message);
                 if (page && !page.isClosed()) {
-                    await page.close();
+                    await page.close().catch(console.error);
                 }
             }
         }
 
+        // Send successful response
+        res.status(200).json({
+            message: 'Scraping job finished successfully.',
+            htmlFiles: htmlFiles,
+            screenshotFiles: screenshotFiles,
+            pagesProcessed: visitedUrls.size
+        });
+
     } catch (error) {
         console.error('An unexpected error occurred:', error);
+        res.status(500).json(createSafeError(
+            'An internal error occurred while processing your request. Please try again later.',
+            error
+        ));
     } finally {
+        // Enhanced cleanup
         if (browser) {
-            await browser.close();
-            console.log('Browser closed.');
+            try {
+                const pages = await browser.pages();
+                await Promise.all(pages.map(page => {
+                    if (!page.isClosed()) {
+                        return page.close().catch(console.error);
+                    }
+                }));
+
+                await browser.close();
+                console.log('Browser and all pages closed.');
+            } catch (cleanupError) {
+                console.error('Error during cleanup:', cleanupError);
+            }
         }
-        console.log(`Scraping job ${jobId} finished (or timed out).`);
+
+        // Clear large objects
+        screenshotFiles.length = 0;
+        htmlFiles.length = 0;
+        visitedUrls.clear();
+        pagesToVisit.length = 0;
+
+        console.log('Scraping job finished and resources cleaned up.');
+    }
+}
+
+/**
+ * Entry point for the Cloud Function with timeout protection.
+ * This function will be triggered by an HTTP POST request from your frontend.
+ *
+ * @param {object} req The HTTP request object.
+ * @param {object} res The HTTP response object.
+ */
+exports.scrapeAndScreenshot = async (req, res) => {
+    // Set CORS headers for the response
+    res.set('Access-Control-Allow-Origin', '*');
+
+    if (req.method === 'OPTIONS') {
+        res.set('Access-Control-Allow-Methods', 'POST');
+        res.set('Access-Control-Allow-Headers', 'Content-Type');
+        res.set('Access-Control-Max-Age', '3600');
+        return res.status(204).send('');
+    }
+
+    // Global timeout protection
+    const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Operation timeout exceeded')), MAX_EXECUTION_TIME);
+    });
+
+    try {
+        await Promise.race([
+            performScraping(req, res),
+            timeoutPromise
+        ]);
+    } catch (error) {
+        if (error.message === 'Operation timeout exceeded') {
+            console.error('Operation timed out');
+            return res.status(408).json(createSafeError('Request timeout - operation took too long'));
+        }
+        
+        console.error('Unexpected error in main handler:', error);
+        if (!res.headersSent) {
+            res.status(500).json(createSafeError(
+                'An internal error occurred while processing your request. Please try again later.',
+                error
+            ));
+        }
     }
 };

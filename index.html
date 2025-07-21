@@ -6,17 +6,12 @@
     <title>Website Subpage Scraper & Screenshotter</title>
     <!-- Tailwind CSS CDN for easy styling -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Firebase SDKs -->
+    <!-- Firebase SDKs (for local testing, actual Firebase features are removed from backend) -->
     <script type="module">
-        // Import the functions you need from the SDKs you need
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, query, orderBy, onSnapshot, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Firebase configuration (will be provided by Canvas runtime)
-        // IMPORTANT CHANGE: Provide a dummy config for local testing if __firebase_config is undefined
+        // Dummy Firebase config for local frontend initialization.
+        // This is only used when __firebase_config is not provided (e.g., when running locally).
         const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : JSON.stringify({
-            apiKey: "dummy-api-key", // Dummy key for local testing
+            apiKey: "dummy-api-key", 
             authDomain: "dummy-project.firebaseapp.com",
             projectId: "dummy-project-id",
             storageBucket: "dummy-project-id.appspot.com",
@@ -24,18 +19,24 @@
             appId: "1:1234567890:web:abcdef1234567890abcdef"
         }));
         
+        // These are needed for Firebase initialization, even if not fully used in this backend version
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // Firestore imports are still here for the UI to compile, but not actively used for real-time updates in this backend version.
+        import { getFirestore, collection, query, orderBy, onSnapshot, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const db = getFirestore(app);
+        const db = getFirestore(app); // Still initialize db for consistency, but not used for real-time updates
 
-        let currentUserId = null; // To store the authenticated user ID
-        let isAuthReady = false; // Flag to indicate if auth state is ready
+        let currentUserId = null; 
+        let isAuthReady = false; 
 
-        // Authenticate user
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 currentUserId = user.uid;
@@ -43,116 +44,96 @@
             } else {
                 console.log("No user signed in. Attempting authentication...");
                 try {
-                    // Always try custom token first if available (provided by Canvas for authenticated users)
                     if (initialAuthToken) {
                         await signInWithCustomToken(auth, initialAuthToken);
                         currentUserId = auth.currentUser.uid;
                         console.log("Signed in with custom token. User ID:", currentUserId);
                     } else {
-                        // If no custom token, or if previous custom token sign-in failed/wasn't attempted, try anonymous sign-in
                         await signInAnonymously(auth);
                         currentUserId = auth.currentUser.uid;
                         console.log("Signed in anonymously. User ID:", currentUserId);
                     }
                 } catch (error) {
-                    console.error("Firebase authentication (custom token/initial anonymous) error:", error);
-                    // As a final fallback, use a random UUID if all authentication methods fail
+                    console.error("Firebase authentication error:", error);
                     currentUserId = crypto.randomUUID();
                     console.warn("Using random UUID as User ID due to authentication failure:", currentUserId);
                 }
             }
-            isAuthReady = true; // Auth state is now known
+            isAuthReady = true; 
             document.getElementById('currentUserIdDisplay').textContent = `Your User ID: ${currentUserId}`;
-            document.getElementById('userIdInput').value = currentUserId; // Pre-fill hidden input
-            document.getElementById('scrapeForm').classList.remove('hidden'); // Show form once auth is ready
+            document.getElementById('userIdInput').value = currentUserId; 
+            document.getElementById('scrapeForm').classList.remove('hidden'); 
         });
 
 
         document.getElementById('scrapeForm').addEventListener('submit', async function(event) {
-            event.preventDefault(); // Prevent default form submission
+            event.preventDefault(); 
+
+            const messageBox = document.getElementById('messageBox');
+            const outputContentDiv = document.getElementById('outputContent');
+            const currentJobIdDisplay = document.getElementById('currentJobIdDisplay');
+            const jobResultsSection = document.getElementById('jobResultsSection');
 
             if (!isAuthReady || !currentUserId) {
                 showMessage('Authentication not ready. Please wait.', 'error');
                 return;
             }
 
-            let urlInput = document.getElementById('url').value.trim(); // Trim whitespace
+            let urlInput = document.getElementById('url').value.trim(); 
             const emailInput = document.getElementById('email').value;
-            const userIdInput = document.getElementById('userIdInput').value;
+            const userIdInput = document.getElementById('userIdInput').value; // Still send userId, though backend won't use it in this version
 
-            // Prepend protocol if missing
             if (!urlInput.startsWith('http://') && !urlInput.startsWith('https://')) {
-                urlInput = 'https://' + urlInput; // Default to https
+                urlInput = 'https://' + urlInput; 
             }
 
-            // Basic validation for non-empty URL after prepending
-            if (!urlInput || !emailInput || !userIdInput) {
-                showMessage('Please enter a valid website URL, your email, and ensure User ID is available.', 'error');
+            if (!urlInput || !emailInput) { // userId is not validated in this frontend for pre-Firebase backend
+                showMessage('Please enter a valid website URL and your email.', 'error');
                 return;
             }
 
-
-            // Clear previous messages and output
             messageBox.style.display = 'none';
             messageBox.className = 'message-box';
             outputContentDiv.innerHTML = '';
             currentJobIdDisplay.textContent = 'N/A';
-            jobResultsSection.classList.add('hidden'); // Hide results until a job starts
+            jobResultsSection.classList.add('hidden'); 
 
-            showMessage('Initiating scraping job...', 'success');
+            showMessage('Processing your request...', 'success');
 
-            // IMPORTANT: Replaced placeholder with your actual backend serverless function URL
             const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot'; 
 
             try {
                 const response = await fetch(backendApiUrl, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ url: urlInput, email: emailInput, userId: userIdInput }),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: urlInput, email: emailInput, userId: userIdInput }) // userId still sent, but ignored by backend
                 });
 
                 const result = await response.json();
 
-                if (response.status === 202) { // 202 Accepted, indicating job started
-                    const jobId = result.jobId;
-                    const returnedUserId = result.userId; 
-                    showMessage(`Scraping job started (ID: ${jobId}). Results will appear below as they are processed.`, 'success');
-                    currentJobIdDisplay.textContent = jobId;
-                    jobResultsSection.classList.remove('hidden'); 
+                if (response.ok) { 
+                    showMessage(result.message || 'Request submitted successfully!', 'success');
+                    jobResultsSection.classList.remove('hidden'); // Show results section
+                    currentJobIdDisplay.textContent = 'N/A (No Job ID from pre-Firebase backend)'; // Indicate no job ID
 
-                    // Start listening to Firestore for results for this jobId
-                    const q = query(collection(db, `artifacts/${appId}/users/${returnedUserId}/scrape_results/${jobId}/pages`), orderBy('timestamp'));
-
-                    onSnapshot(q, (snapshot) => {
-                        snapshot.docChanges().forEach((change) => {
-                            if (change.type === "added") {
-                                const data = change.doc.data();
-                                const pageDiv = document.createElement('div');
-                                pageDiv.className = 'p-3 border-b border-gray-200 last:border-b-0';
-                                pageDiv.innerHTML = `
-                                    <h3 class="font-semibold text-gray-800">${data.originalUrl}</h3>
-                                    <p class="text-sm text-gray-600 mt-1">
-                                        <a href="${data.htmlUrl}" target="_blank" class="text-blue-600 hover:underline">View HTML</a> | 
-                                        <a href="${data.screenshotUrl}" target="_blank" class="text-blue-600 hover:underline">View Screenshot</a>
-                                    </p>
-                                    <p class="text-xs text-gray-500 mt-1">Processed: ${data.timestamp ? data.timestamp.toDate().toLocaleString() : 'N/A'}</p>
-                                    <p class="text-xs text-gray-500">File Name: ${data.fileName}.jpeg/.html</p>
-                                `;
-                                outputContentDiv.prepend(pageDiv); 
-                            }
+                    // Display results from the final JSON response
+                    if (result.htmlFiles && result.htmlFiles.length > 0) {
+                        outputContentDiv.innerHTML += '<h3 class="font-bold text-gray-700 mt-4 mb-2">HTML Files:</h3>';
+                        result.htmlFiles.forEach(file => {
+                            outputContentDiv.innerHTML += `<a href="${file.url}" target="_blank" class="block text-blue-600 hover:underline">${file.name}</a>`;
                         });
-                    }, (error) => {
-                        console.error("Error listening to Firestore:", error);
-                        showMessage("Error fetching real-time results. Check console for details.", 'error');
-                    });
-
+                    }
+                    if (result.screenshotFiles && result.screenshotFiles.length > 0) {
+                        outputContentDiv.innerHTML += '<h3 class="font-bold text-gray-700 mt-4 mb-2">Screenshots:</h3>';
+                        result.screenshotFiles.forEach(file => {
+                            outputContentDiv.innerHTML += `<a href="${file.url}" target="_blank" class="block text-blue-600 hover:underline">${file.name}</a>`;
+                        });
+                    }
                 } else {
-                    showMessage(result.error || 'An unexpected error occurred when starting the job.', 'error');
+                    showMessage(result.error || 'An error occurred while processing your request.', 'error');
                 }
             } catch (error) {
-                showMessage('Network error or server unreachable. Please ensure your Cloud Function is deployed and accessible.', 'error');
+                showMessage('Network error or server unreachable. Please try again later.', 'error');
                 console.error('Fetch error:', error);
             }
         });
@@ -165,7 +146,6 @@
             messageBox.style.display = 'block';
         }
 
-        // Expose Firebase and userId globally for debugging if needed, but primarily used within module
         window.app = app;
         window.auth = auth;
         window.db = db;
@@ -227,7 +207,6 @@
             <input type="hidden" id="userIdInput" name="userId"> <!-- Hidden input for userId -->
             <div>
                 <label for="url" class="block text-sm font-medium text-gray-700 mb-1">Website URL:</label>
-                <!-- IMPORTANT CHANGE: Changed type from "url" to "text" -->
                 <input
                     type="text" 
                     id="url"

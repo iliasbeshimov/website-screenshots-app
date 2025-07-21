@@ -1,0 +1,323 @@
+<!-- METHOD 1: Direct HTML Block Content (Recommended) -->
+<!-- Copy this content into a Custom HTML block in WordPress -->
+
+<!-- Load Chakra Petch Font (if not already loaded by your theme) -->
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600&display=swap" rel="stylesheet">
+
+<div id="website-scraper-app">
+    <h1 class="gradient-text float-animation">Website Subpage Scraper</h1>
+    
+    <p style="text-align: center; margin-bottom: 2em;">
+        Enter a website URL and your email. We'll crawl the site, take screenshots of subpages, and show results in real-time.
+    </p>
+
+    <p id="currentUserIdDisplay" class="user-id-display">Initializing user...</p>
+
+    <div class="form-container">
+        <form id="scrapeForm" class="hidden"> <!-- Hidden until Firebase auth is ready -->
+            <input type="hidden" id="userIdInput" name="userId"> <!-- Hidden input for userId -->
+            
+            <div class="form-group">
+                <label for="url">Website URL:</label>
+                <input
+                    type="text" 
+                    id="url"
+                    name="url"
+                    placeholder="e.g., example.com or https://example.com"
+                    required
+                >
+            </div>
+            
+            <div class="form-group">
+                <label for="email">Your Email:</label>
+                <input
+                    type="email"
+                    id="email"
+                    name="email"
+                    placeholder="e.g., yourname@example.com"
+                    required
+                >
+            </div>
+            
+            <button type="submit">
+                Start Scraping & Screenshotting
+            </button>
+        </form>
+    </div>
+
+    <div id="messageBox" class="message-box"></div>
+
+    <div id="jobResultsSection" class="results-section hidden">
+        <h2>Job Results</h2>
+        <p style="font-size: 0.9em; color: var(--ui-secondary); margin-bottom: 1.333em;">
+            Job ID: <span id="currentJobIdDisplay" style="font-family: 'Courier New', sans-serif;">N/A</span>
+        </p>
+        <div id="outputContent">
+            <!-- Results will appear here dynamically -->
+            <p style="color: var(--ui-secondary); font-size: 0.9em;">Results will load here in real-time as pages are processed.</p>
+        </div>
+    </div>
+</div>
+
+<style>
+/* Additional styles specific to the scraper (your theme already has most styles) */
+#website-scraper-app {
+    max-width: 48em;
+    margin: 2em auto;
+    padding: 0;
+}
+
+#website-scraper-app .form-container {
+    max-width: 48em;
+    margin: 2em auto;
+    padding: 0;
+}
+
+#website-scraper-app .form-group {
+    margin-bottom: 1.333em;
+}
+
+#website-scraper-app label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.5em;
+    font-size: 0.9em;
+}
+
+#website-scraper-app input[type="text"],
+#website-scraper-app input[type="email"] {
+    width: 100%;
+    padding: 0.75em;
+    border: 1px solid var(--ui-secondary);
+    border-radius: 0;
+    font-family: 'Courier New', sans-serif;
+    font-size: 1em;
+    line-height: 1.333;
+    box-sizing: border-box;
+}
+
+#website-scraper-app input[type="text"]:focus,
+#website-scraper-app input[type="email"]:focus {
+    outline: 1px dotted;
+    outline-offset: 0.1875em;
+    border-radius: 1px;
+    border-color: var(--ui-primary);
+}
+
+#website-scraper-app button {
+    background-color: var(--ui-primary);
+    color: white;
+    border: none;
+    padding: 0.75em 1.5em;
+    font-family: 'Courier New', sans-serif;
+    font-size: 1em;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    width: 100%;
+    margin-top: 1em;
+}
+
+#website-scraper-app button:hover {
+    background-color: #333;
+}
+
+#website-scraper-app button:focus {
+    outline: 1px dotted white;
+    outline-offset: 0.1875em;
+}
+
+#website-scraper-app .message-box {
+    display: none;
+    padding: 1em;
+    margin: 1.333em 0;
+    font-family: 'Courier New', sans-serif;
+}
+
+#website-scraper-app .message-box.success,
+#website-scraper-app .message-box.error {
+    background-color: #f4f1f1;
+    border: 1px solid #d2caca;
+    color: var(--ui-primary);
+}
+
+#website-scraper-app .results-section {
+    margin-top: 2.666em;
+    padding: 1.333em;
+    background-color: #f4f1f1;
+    border: 1px solid #d2caca;
+}
+
+#website-scraper-app .user-id-display {
+    font-size: 0.85em;
+    color: var(--ui-secondary);
+    text-align: center;
+    margin-bottom: 1.333em;
+    font-style: italic;
+}
+
+#website-scraper-app .hidden {
+    display: none;
+}
+</style>
+
+<script type="module">
+// Firebase config and JavaScript functionality
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : JSON.stringify({
+    apiKey: "dummy-api-key", 
+    authDomain: "dummy-project.firebaseapp.com",
+    projectId: "dummy-project-id",
+    storageBucket: "dummy-project-id.appspot.com",
+    messagingSenderId: "1234567890",
+    appId: "1:1234567890:web:abcdef1234567890abcdef"
+}));
+
+// Firebase imports
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, collection, query, orderBy, onSnapshot, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+let currentUserId = null; 
+let isAuthReady = false; 
+
+onAuthStateChanged(auth, async (user) => {
+    if (user) {
+        currentUserId = user.uid;
+        console.log("Firebase authenticated. User ID:", currentUserId);
+    } else {
+        console.log("No user signed in. Attempting authentication...");
+        try {
+            if (initialAuthToken) {
+                await signInWithCustomToken(auth, initialAuthToken);
+                currentUserId = auth.currentUser.uid;
+                console.log("Signed in with custom token. User ID:", currentUserId);
+            } else {
+                await signInAnonymously(auth);
+                currentUserId = auth.currentUser.uid;
+                console.log("Signed in anonymously. User ID:", currentUserId);
+            }
+        } catch (error) {
+            console.error("Firebase authentication error:", error);
+            currentUserId = crypto.randomUUID();
+            console.warn("Using random UUID as User ID due to authentication failure:", currentUserId);
+        }
+    }
+    isAuthReady = true; 
+    document.getElementById('currentUserIdDisplay').textContent = `Your User ID: ${currentUserId}`;
+    document.getElementById('userIdInput').value = currentUserId; 
+    document.getElementById('scrapeForm').classList.remove('hidden'); 
+});
+
+document.getElementById('scrapeForm').addEventListener('submit', async function(event) {
+    event.preventDefault(); 
+
+    const messageBox = document.getElementById('messageBox');
+    const outputContentDiv = document.getElementById('outputContent');
+    const currentJobIdDisplay = document.getElementById('currentJobIdDisplay');
+    const jobResultsSection = document.getElementById('jobResultsSection');
+
+    if (!isAuthReady || !currentUserId) {
+        showMessage('Authentication not ready. Please wait.', 'error');
+        return;
+    }
+
+    let urlInput = document.getElementById('url').value.trim(); 
+    const emailInput = document.getElementById('email').value;
+    const userIdInput = document.getElementById('userIdInput').value;
+
+    if (!urlInput.startsWith('http://') && !urlInput.startsWith('https://')) {
+        urlInput = 'https://' + urlInput; 
+    }
+
+    if (!urlInput || !emailInput) {
+        showMessage('Please enter a valid website URL and your email.', 'error');
+        return;
+    }
+
+    messageBox.style.display = 'none';
+    messageBox.className = 'message-box';
+    outputContentDiv.innerHTML = '';
+    currentJobIdDisplay.textContent = 'N/A';
+    jobResultsSection.classList.add('hidden'); 
+
+    showMessage('Processing your request...', 'success');
+
+    const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot'; 
+
+    try {
+        const response = await fetch(backendApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: urlInput, email: emailInput, userId: userIdInput })
+        });
+
+        const result = await response.json();
+
+        if (response.ok) { 
+            showMessage(result.message || 'Request submitted successfully!', 'success');
+            jobResultsSection.classList.remove('hidden');
+            currentJobIdDisplay.textContent = 'N/A (No Job ID from pre-Firebase backend)';
+
+            // Display results from the final JSON response
+            if (result.htmlFiles && result.htmlFiles.length > 0) {
+                outputContentDiv.innerHTML += '<h3>HTML Files:</h3>';
+                result.htmlFiles.forEach(file => {
+                    outputContentDiv.innerHTML += `<p><a href="${file.url}" target="_blank">${file.name}</a></p>`;
+                });
+            }
+            if (result.screenshotFiles && result.screenshotFiles.length > 0) {
+                outputContentDiv.innerHTML += '<h3>Screenshots:</h3>';
+                result.screenshotFiles.forEach(file => {
+                    outputContentDiv.innerHTML += `<p><a href="${file.url}" target="_blank">${file.name}</a></p>`;
+                });
+            }
+        } else {
+            showMessage(result.error || 'An error occurred while processing your request.', 'error');
+        }
+    } catch (error) {
+        showMessage('Network error or server unreachable. Please try again later.', 'error');
+        console.error('Fetch error:', error);
+    }
+});
+
+function showMessage(text, type) {
+    const messageBox = document.getElementById('messageBox');
+    messageBox.classList.remove('success', 'error');
+    messageBox.classList.add(type);
+    messageBox.textContent = text;
+    messageBox.style.display = 'block';
+}
+</script>
+
+<!-- METHOD 2: Shortcode for functions.php (Alternative approach) -->
+<!-- 
+If you prefer a shortcode approach, add this to your theme's functions.php:
+
+function website_scraper_shortcode() {
+    ob_start();
+    include(get_template_directory() . '/scraper.html'); // Path to your HTML file
+    return ob_start();
+}
+add_shortcode('website_scraper', 'website_scraper_shortcode');
+
+Then use [website_scraper] in your page content.
+-->
+
+<!-- METHOD 3: Iframe Embed (If hosting HTML file separately) -->
+<!-- 
+<iframe src="https://yourdomain.com/path/to/index.html" 
+        width="100%" 
+        height="800px" 
+        frameborder="0"
+        style="border: none; max-width: 100%;">
+</iframe>
+-->
