@@ -590,6 +590,47 @@ async function performScraping(req, res) {
 }
 
 /**
+ * Validates that the request comes from an allowed domain
+ * @param {object} req The HTTP request object
+ * @returns {boolean} True if domain is allowed, false otherwise
+ */
+function validateDomain(req) {
+    // List of allowed domains/origins
+    const allowedDomains = [
+        'labratorium.com',
+        'localhost',
+        '127.0.0.1'
+    ];
+
+    const origin = req.headers.origin || req.headers.referer;
+    
+    if (!origin) {
+        console.warn('Request missing origin/referer header');
+        return false;
+    }
+
+    // Check if origin matches any allowed domain (including subdomains)
+    const isAllowed = allowedDomains.some(allowedDomain => {
+        try {
+            const originUrl = new URL(origin);
+            const hostname = originUrl.hostname;
+            
+            // Allow exact match or subdomain match
+            return hostname === allowedDomain || 
+                   hostname.endsWith('.' + allowedDomain);
+        } catch (e) {
+            return false;
+        }
+    });
+
+    if (!isAllowed) {
+        console.warn(`Request from unauthorized domain: ${origin}`);
+    }
+
+    return isAllowed;
+}
+
+/**
  * Entry point for the Cloud Function with timeout protection.
  * This function will be triggered by an HTTP POST request from your frontend.
  *
@@ -597,8 +638,18 @@ async function performScraping(req, res) {
  * @param {object} res The HTTP response object.
  */
 exports.scrapeAndScreenshot = async (req, res) => {
-    // Set CORS headers for the response
-    res.set('Access-Control-Allow-Origin', '*');
+    // Validate domain before processing request
+    if (!validateDomain(req)) {
+        return res.status(403).json(createSafeError(
+            'Requests are only allowed from authorized domains'
+        ));
+    }
+
+    // Set CORS headers for the response (restrict to allowed origins)
+    const origin = req.headers.origin;
+    if (origin && validateDomain(req)) {
+        res.set('Access-Control-Allow-Origin', origin);
+    }
 
     if (req.method === 'OPTIONS') {
         res.set('Access-Control-Allow-Methods', 'POST');
