@@ -244,6 +244,51 @@
         window.db = db;
         window.currentUserId = currentUserId; 
         window.appId = appId;
+
+        // Auto-resize iframe functionality for WordPress embedding
+        function sendHeightToParent() {
+            const height = Math.max(
+                document.body.scrollHeight,
+                document.body.offsetHeight,
+                document.documentElement.clientHeight,
+                document.documentElement.scrollHeight,
+                document.documentElement.offsetHeight
+            );
+            
+            if (window.parent !== window) {
+                window.parent.postMessage({
+                    type: 'resize',
+                    height: height
+                }, '*');
+            }
+        }
+
+        // Send height on load and content changes
+        window.addEventListener('load', sendHeightToParent);
+        window.addEventListener('resize', sendHeightToParent);
+
+        // Send height when results are displayed (observe changes to output content)
+        const observer = new MutationObserver(sendHeightToParent);
+        const outputContent = document.getElementById('outputContent');
+        if (outputContent) {
+            observer.observe(outputContent, {
+                childList: true,
+                subtree: true
+            });
+        }
+
+        // Also observe the job results section for when it becomes visible
+        const jobResultsSection = document.getElementById('jobResultsSection');
+        if (jobResultsSection) {
+            observer.observe(jobResultsSection, {
+                attributes: true,
+                attributeFilter: ['class']
+            });
+        }
+
+        // Call it initially and periodically for any missed changes
+        sendHeightToParent();
+        setInterval(sendHeightToParent, 2000);
     </script>
     <style>
         /* Set up CSS variables for consistent theming */
