@@ -605,6 +605,7 @@ function validateDomain(req) {
     // List of allowed domains/origins
     const allowedDomains = [
         'labratorium.com',
+        'iliasbeshimov.github.io', // Your specific GitHub Pages domain
         'localhost',
         '127.0.0.1'
     ];
