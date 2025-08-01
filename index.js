@@ -365,18 +365,13 @@ async function performScraping(req, res) {
                 });
 
                 console.log(`[DEBUG] Navigating to ${normalizedCurrentUrl}...`);
-                const navigationPromise = page.waitForNavigation({ 
-                    waitUntil: ['domcontentloaded', 'load'], 
-                    timeout: 120000 
+                await page.goto(normalizedCurrentUrl, { 
+                    waitUntil: ['domcontentloaded'], 
+                    timeout: 60000 
                 });
                 
-                await Promise.all([
-                    navigationPromise,
-                    page.goto(normalizedCurrentUrl, { 
-                        waitUntil: ['domcontentloaded', 'load'], 
-                        timeout: 120000 
-                    })
-                ]);
+                // Wait a bit for any dynamic content to load
+                await delay(2000);
                 console.log(`[DEBUG] Page ${normalizedCurrentUrl} loaded and settled.`);
 
                 // Controlled scrolling
@@ -385,23 +380,38 @@ async function performScraping(req, res) {
                 const maxScrollAttempts = 5; // Reduced for security
 
                 console.log(`[DEBUG] Starting scroll for ${normalizedCurrentUrl}...`);
-                while (scrollAttempts < maxScrollAttempts) {
-                    const newScrollHeight = await page.evaluate(() => {
-                        window.scrollBy(0, window.innerHeight);
-                        return document.documentElement.scrollHeight;
-                    });
+                try {
+                    while (scrollAttempts < maxScrollAttempts) {
+                        try {
+                            const newScrollHeight = await page.evaluate(() => {
+                                window.scrollBy(0, window.innerHeight);
+                                return document.documentElement.scrollHeight;
+                            });
 
-                    await delay(1000);
+                            await delay(1000);
 
-                    if (newScrollHeight === lastScrollHeight) {
-                        break;
+                            if (newScrollHeight === lastScrollHeight) {
+                                break;
+                            }
+                            lastScrollHeight = newScrollHeight;
+                            scrollAttempts++;
+                        } catch (scrollError) {
+                            console.warn(`Scroll attempt ${scrollAttempts} failed: ${scrollError.message}`);
+                            break;
+                        }
                     }
-                    lastScrollHeight = newScrollHeight;
-                    scrollAttempts++;
+                    
+                    try {
+                        await page.evaluate(() => window.scrollTo(0, 0));
+                        await delay(1000);
+                    } catch (resetScrollError) {
+                        console.warn(`Failed to reset scroll position: ${resetScrollError.message}`);
+                    }
+                    
+                    console.log(`[DEBUG] Scroll completed for ${normalizedCurrentUrl}.`);
+                } catch (scrollError) {
+                    console.warn(`Scrolling failed for ${normalizedCurrentUrl}: ${scrollError.message}`);
                 }
-                await page.evaluate(() => window.scrollTo(0, 0));
-                await delay(2000);
-                console.log(`[DEBUG] Scroll completed for ${normalizedCurrentUrl}.`);
 
                 // Extract links before taking screenshot
                 console.log(`[DEBUG] Extracting links from ${normalizedCurrentUrl}...`);
@@ -471,7 +481,13 @@ async function performScraping(req, res) {
 
                 // Save HTML with size validation
                 console.log(`[DEBUG] Saving HTML for ${normalizedCurrentUrl}...`);
-                const htmlContent = await page.content();
+                let htmlContent;
+                try {
+                    htmlContent = await page.content();
+                } catch (contentError) {
+                    console.error(`Failed to get page content for ${normalizedCurrentUrl}: ${contentError.message}`);
+                    htmlContent = '<html><body>Error: Could not retrieve page content</body></html>';
+                }
 
                 // Validate HTML size
                 if (Buffer.byteLength(htmlContent, 'utf8') > MAX_HTML_SIZE) {
@@ -490,16 +506,23 @@ async function performScraping(req, res) {
 
                 // Take screenshot with size validation
                 console.log(`[DEBUG] Taking screenshot for ${normalizedCurrentUrl}...`);
-                const screenshotBuffer = await page.screenshot({
-                    type: 'jpeg',
-                    quality: 80,
-                    fullPage: true,
-                });
+                let screenshotBuffer;
+                try {
+                    screenshotBuffer = await page.screenshot({
+                        type: 'jpeg',
+                        quality: 80,
+                        fullPage: true,
+                    });
+                } catch (screenshotError) {
+                    console.error(`Failed to take screenshot for ${normalizedCurrentUrl}: ${screenshotError.message}`);
+                    // Skip screenshot if it fails, but continue processing
+                    screenshotBuffer = null;
+                }
 
-                // Validate screenshot size
-                if (screenshotBuffer.length > MAX_SCREENSHOT_SIZE) {
+                // Validate screenshot size and save if successful
+                if (screenshotBuffer && screenshotBuffer.length > MAX_SCREENSHOT_SIZE) {
                     console.warn(`Screenshot too large for ${normalizedCurrentUrl}: ${screenshotBuffer.length} bytes. Skipping.`);
-                } else {
+                } else if (screenshotBuffer) {
                     const screenshotFileName = `screenshots/${fileNameBase}.jpeg`;
                     const screenshotFileRef = storage.bucket(BUCKET_NAME).file(screenshotFileName);
                     await screenshotFileRef.save(screenshotBuffer, {
