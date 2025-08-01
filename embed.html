@@ -1,21 +1,17 @@
-<!-- METHOD 1: Direct HTML Block Content (Recommended) -->
-<!-- Copy this content into a Custom HTML block in WordPress -->
-
 <!-- Load Chakra Petch Font (if not already loaded by your theme) -->
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600&display=swap" rel="stylesheet">
 
 <div id="website-scraper-app">
-    <h1 class="gradient-text float-animation">Website Subpage Scraper</h1>
+    <h1 class="gradient-text float-animation">Website Auto Screenshot-er</h1>
     
     <p style="text-align: center; margin-bottom: 2em;">
-        Enter a website URL and your email. We'll crawl the site, take screenshots of subpages, and show results in real-time.
+        Enter a website URL. We'll crawl the site, take screenshots of subpages, and show results in real-time.
     </p>
 
-    <p id="currentUserIdDisplay" class="user-id-display">Initializing user...</p>
 
     <div class="form-container">
-        <form id="scrapeForm" class="hidden"> <!-- Hidden until Firebase auth is ready -->
-            <input type="hidden" id="userIdInput" name="userId"> <!-- Hidden input for userId -->
+        <form id="scrapeForm" class="hidden">
+            <input type="hidden" id="userIdInput" name="userId">
             
             <div class="form-group">
                 <label for="url">Website URL:</label>
@@ -28,16 +24,6 @@
                 >
             </div>
             
-            <div class="form-group">
-                <label for="email">Your Email:</label>
-                <input
-                    type="email"
-                    id="email"
-                    name="email"
-                    placeholder="e.g., yourname@example.com"
-                    required
-                >
-            </div>
             
             <button type="submit">
                 Start Scraping & Screenshotting
@@ -49,11 +35,7 @@
 
     <div id="jobResultsSection" class="results-section hidden">
         <h2>Job Results</h2>
-        <p style="font-size: 0.9em; color: var(--ui-secondary); margin-bottom: 1.333em;">
-            Job ID: <span id="currentJobIdDisplay" style="font-family: 'Courier New', sans-serif;">N/A</span>
-        </p>
         <div id="outputContent">
-            <!-- Results will appear here dynamically -->
             <p style="color: var(--ui-secondary); font-size: 0.9em;">Results will load here in real-time as pages are processed.</p>
         </div>
     </div>
@@ -84,8 +66,7 @@
     font-size: 0.9em;
 }
 
-#website-scraper-app input[type="text"],
-#website-scraper-app input[type="email"] {
+#website-scraper-app input[type="text"] {
     width: 100%;
     padding: 0.75em;
     border: 1px solid var(--ui-secondary);
@@ -96,8 +77,7 @@
     box-sizing: border-box;
 }
 
-#website-scraper-app input[type="text"]:focus,
-#website-scraper-app input[type="email"]:focus {
+#website-scraper-app input[type="text"]:focus {
     outline: 1px dotted;
     outline-offset: 0.1875em;
     border-radius: 1px;
@@ -149,13 +129,6 @@
     border: 1px solid #d2caca;
 }
 
-#website-scraper-app .user-id-display {
-    font-size: 0.85em;
-    color: var(--ui-secondary);
-    text-align: center;
-    margin-bottom: 1.333em;
-    font-style: italic;
-}
 
 #website-scraper-app .hidden {
     display: none;
@@ -163,7 +136,7 @@
 </style>
 
 <script type="module">
-// Firebase config and JavaScript functionality
+// Firebase config
 const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : JSON.stringify({
     apiKey: "dummy-api-key", 
     authDomain: "dummy-project.firebaseapp.com",
@@ -173,15 +146,13 @@ const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __f
     appId: "1:1234567890:web:abcdef1234567890abcdef"
 }));
 
-// Firebase imports
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, collection, query, orderBy, onSnapshot, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+import { getFirestore } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -212,7 +183,6 @@ onAuthStateChanged(auth, async (user) => {
         }
     }
     isAuthReady = true; 
-    document.getElementById('currentUserIdDisplay').textContent = `Your User ID: ${currentUserId}`;
     document.getElementById('userIdInput').value = currentUserId; 
     document.getElementById('scrapeForm').classList.remove('hidden'); 
 });
@@ -222,7 +192,6 @@ document.getElementById('scrapeForm').addEventListener('submit', async function(
 
     const messageBox = document.getElementById('messageBox');
     const outputContentDiv = document.getElementById('outputContent');
-    const currentJobIdDisplay = document.getElementById('currentJobIdDisplay');
     const jobResultsSection = document.getElementById('jobResultsSection');
 
     if (!isAuthReady || !currentUserId) {
@@ -231,22 +200,20 @@ document.getElementById('scrapeForm').addEventListener('submit', async function(
     }
 
     let urlInput = document.getElementById('url').value.trim(); 
-    const emailInput = document.getElementById('email').value;
     const userIdInput = document.getElementById('userIdInput').value;
 
     if (!urlInput.startsWith('http://') && !urlInput.startsWith('https://')) {
         urlInput = 'https://' + urlInput; 
     }
 
-    if (!urlInput || !emailInput) {
-        showMessage('Please enter a valid website URL and your email.', 'error');
+    if (!urlInput) {
+        showMessage('Please enter a valid website URL.', 'error');
         return;
     }
 
     messageBox.style.display = 'none';
     messageBox.className = 'message-box';
     outputContentDiv.innerHTML = '';
-    currentJobIdDisplay.textContent = 'N/A';
     jobResultsSection.classList.add('hidden'); 
 
     showMessage('Processing your request...', 'success');
@@ -257,7 +224,7 @@ document.getElementById('scrapeForm').addEventListener('submit', async function(
         const response = await fetch(backendApiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: urlInput, email: emailInput, userId: userIdInput })
+            body: JSON.stringify({ url: urlInput, userId: userIdInput })
         });
 
         const result = await response.json();
@@ -265,21 +232,32 @@ document.getElementById('scrapeForm').addEventListener('submit', async function(
         if (response.ok) { 
             showMessage(result.message || 'Request submitted successfully!', 'success');
             jobResultsSection.classList.remove('hidden');
-            currentJobIdDisplay.textContent = 'N/A (No Job ID from pre-Firebase backend)';
+
+
+            // Display page count
+            const pagesFound = result.pagesProcessed || 0;
+            outputContentDiv.innerHTML = `<p style="font-weight: 600; margin-bottom: 1em;">Found and processed ${pagesFound} pages</p>`;
 
             // Display results from the final JSON response
             if (result.htmlFiles && result.htmlFiles.length > 0) {
-                outputContentDiv.innerHTML += '<h3>HTML Files:</h3>';
+                outputContentDiv.innerHTML += '<div style="margin-bottom: 2em;"><h3>HTML Files:</h3>';
                 result.htmlFiles.forEach(file => {
                     outputContentDiv.innerHTML += `<p><a href="${file.url}" target="_blank">${file.name}</a></p>`;
                 });
+                outputContentDiv.innerHTML += `<button onclick="downloadAllHTML()" style="margin-top: 1em; padding: 0.5em 1em; background-color: var(--ui-primary); color: white; border: none; cursor: pointer; font-family: 'Courier New', sans-serif;">Download All HTML Files (ZIP)</button></div>`;
             }
+            
             if (result.screenshotFiles && result.screenshotFiles.length > 0) {
-                outputContentDiv.innerHTML += '<h3>Screenshots:</h3>';
+                outputContentDiv.innerHTML += '<div><h3>Screenshots:</h3>';
                 result.screenshotFiles.forEach(file => {
                     outputContentDiv.innerHTML += `<p><a href="${file.url}" target="_blank">${file.name}</a></p>`;
                 });
+                outputContentDiv.innerHTML += `<button onclick="downloadAllScreenshots()" style="margin-top: 1em; padding: 0.5em 1em; background-color: var(--ui-primary); color: white; border: none; cursor: pointer; font-family: 'Courier New', sans-serif;">Download All Screenshots (ZIP)</button></div>`;
             }
+
+            // Store files globally for download functions
+            window.currentHtmlFiles = result.htmlFiles || [];
+            window.currentScreenshotFiles = result.screenshotFiles || [];
         } else {
             showMessage(result.error || 'An error occurred while processing your request.', 'error');
         }
@@ -296,28 +274,110 @@ function showMessage(text, type) {
     messageBox.textContent = text;
     messageBox.style.display = 'block';
 }
+
+// Bulk download functions
+async function downloadAllHTML() {
+    console.log('Download HTML button clicked');
+    console.log('HTML files available:', window.currentHtmlFiles);
+    
+    if (!window.currentHtmlFiles || window.currentHtmlFiles.length === 0) {
+        alert('No HTML files to download');
+        return;
+    }
+    
+    showMessage('Preparing HTML files for download...', 'success');
+    
+    try {
+        const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot';
+        
+        console.log('Requesting server-side ZIP creation...');
+        const response = await fetch(backendApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'download-zip',
+                type: 'html',
+                files: window.currentHtmlFiles
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        console.log('ZIP file received from server');
+        const zipBlob = await response.blob();
+        console.log(`ZIP file size: ${zipBlob.size} bytes`);
+        
+        // Trigger download
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(zipBlob);
+        link.download = 'html-files.zip';
+        document.body.appendChild(link);
+        console.log('Triggering download...');
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+        
+        showMessage('HTML files downloaded successfully!', 'success');
+    } catch (error) {
+        console.error('Download failed:', error);
+        showMessage(`Download failed: ${error.message}`, 'error');
+    }
+}
+
+async function downloadAllScreenshots() {
+    console.log('Download Screenshots button clicked');
+    console.log('Screenshot files available:', window.currentScreenshotFiles);
+    
+    if (!window.currentScreenshotFiles || window.currentScreenshotFiles.length === 0) {
+        alert('No screenshot files to download');
+        return;
+    }
+    
+    showMessage('Preparing screenshots for download...', 'success');
+    
+    try {
+        const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot';
+        
+        console.log('Requesting server-side ZIP creation for screenshots...');
+        const response = await fetch(backendApiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'download-zip',
+                type: 'screenshots',
+                files: window.currentScreenshotFiles
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        console.log('Screenshots ZIP file received from server');
+        const zipBlob = await response.blob();
+        console.log(`Screenshots ZIP file size: ${zipBlob.size} bytes`);
+        
+        // Trigger download
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(zipBlob);
+        link.download = 'screenshots.zip';
+        document.body.appendChild(link);
+        console.log('Triggering screenshots download...');
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+        
+        showMessage('Screenshots downloaded successfully!', 'success');
+    } catch (error) {
+        console.error('Download failed:', error);
+        showMessage(`Download failed: ${error.message}`, 'error');
+    }
+}
+
+// Make download functions globally accessible
+window.downloadAllHTML = downloadAllHTML;
+window.downloadAllScreenshots = downloadAllScreenshots;
 </script>
 
-<!-- METHOD 2: Shortcode for functions.php (Alternative approach) -->
-<!-- 
-If you prefer a shortcode approach, add this to your theme's functions.php:
-
-function website_scraper_shortcode() {
-    ob_start();
-    include(get_template_directory() . '/scraper.html'); // Path to your HTML file
-    return ob_start();
-}
-add_shortcode('website_scraper', 'website_scraper_shortcode');
-
-Then use [website_scraper] in your page content.
--->
-
-<!-- METHOD 3: Iframe Embed (If hosting HTML file separately) -->
-<!-- 
-<iframe src="https://yourdomain.com/path/to/index.html" 
-        width="100%" 
-        height="800px" 
-        frameborder="0"
-        style="border: none; max-width: 100%;">
-</iframe>
--->

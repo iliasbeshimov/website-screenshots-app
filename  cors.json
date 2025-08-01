@@ -1,0 +1,6 @@
+{
+  "origin": ["https://labratorium.com", "https://www.labratorium.com"],
+  "method": ["GET"],
+  "responseHeader": ["Content-Type"],
+  "maxAgeSeconds": 3600
+}

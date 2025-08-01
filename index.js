@@ -7,6 +7,9 @@ const { Storage } = require('@google-cloud/storage');
 const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 
+// Import JSZip for creating ZIP files
+const JSZip = require('jszip');
+
 // Initialize Google Cloud Storage client
 const storage = new Storage();
 
@@ -254,11 +257,11 @@ const EXCLUDED_URL_KEYWORDS = [
  */
 async function performScraping(req, res) {
     // Extract and validate inputs
-    const { url, email } = req.body;
+    const { url } = req.body;
 
-    if (!url || !email) {
-        console.error('Missing URL or Email in request body.');
-        return res.status(400).json(createSafeError('Website URL and Email are required.'));
+    if (!url) {
+        console.error('Missing URL in request body.');
+        return res.status(400).json(createSafeError('Website URL is required.'));
     }
 
     // Validate URL for security (SSRF protection)
@@ -270,16 +273,7 @@ async function performScraping(req, res) {
         return res.status(400).json(createSafeError(error.message));
     }
 
-    // Validate email
-    let validatedEmail;
-    try {
-        validatedEmail = validateEmail(email);
-    } catch (error) {
-        console.error(`Email validation failed: ${error.message}`);
-        return res.status(400).json(createSafeError(error.message));
-    }
-
-    console.log(`Received validated request for URL: ${validatedUrl}, Email: ${validatedEmail}`);
+    console.log(`Received validated request for URL: ${validatedUrl}`);
 
     let browser = null;
     const visitedUrls = new Set();
@@ -411,34 +405,41 @@ async function performScraping(req, res) {
 
                 // Extract links before taking screenshot
                 console.log(`[DEBUG] Extracting links from ${normalizedCurrentUrl}...`);
-                const links = await page.evaluate(() => {
-                    const anchors = Array.from(document.querySelectorAll('a'));
-                    let currentCanonicalHostname = window.location.hostname;
-                    if (currentCanonicalHostname.startsWith('www.') && currentCanonicalHostname.length > 4 && currentCanonicalHostname.includes('.')) {
-                        currentCanonicalHostname = currentCanonicalHostname.substring(4);
-                    }
+                let links = [];
+                
+                try {
+                    links = await page.evaluate(() => {
+                        const anchors = Array.from(document.querySelectorAll('a'));
+                        let currentCanonicalHostname = window.location.hostname;
+                        if (currentCanonicalHostname.startsWith('www.') && currentCanonicalHostname.length > 4 && currentCanonicalHostname.includes('.')) {
+                            currentCanonicalHostname = currentCanonicalHostname.substring(4);
+                        }
 
-                    return anchors
-                        .map(a => a.href)
-                        .filter(href => {
-                            try {
-                                const linkUrl = new URL(href);
-                                if (linkUrl.protocol !== 'http:' && linkUrl.protocol !== 'https:') {
+                        return anchors
+                            .map(a => a.href)
+                            .filter(href => {
+                                try {
+                                    const linkUrl = new URL(href);
+                                    if (linkUrl.protocol !== 'http:' && linkUrl.protocol !== 'https:') {
+                                        return false;
+                                    }
+
+                                    let linkCanonicalHostname = linkUrl.hostname;
+                                    if (linkCanonicalHostname.startsWith('www.') && linkCanonicalHostname.length > 4 && linkCanonicalHostname.includes('.')) {
+                                        linkCanonicalHostname = linkCanonicalHostname.substring(4);
+                                    }
+
+                                    return linkCanonicalHostname === currentCanonicalHostname &&
+                                           !linkUrl.hash && !href.startsWith('mailto:') && !href.startsWith('tel:');
+                                } catch (e) {
                                     return false;
                                 }
-
-                                let linkCanonicalHostname = linkUrl.hostname;
-                                if (linkCanonicalHostname.startsWith('www.') && linkCanonicalHostname.length > 4 && linkCanonicalHostname.includes('.')) {
-                                    linkCanonicalHostname = linkCanonicalHostname.substring(4);
-                                }
-
-                                return linkCanonicalHostname === currentCanonicalHostname &&
-                                       !linkUrl.hash && !href.startsWith('mailto:') && !href.startsWith('tel:');
-                            } catch (e) {
-                                return false;
-                            }
-                        });
-                });
+                            });
+                    });
+                } catch (linkExtractionError) {
+                    console.error(`Failed to extract links from ${normalizedCurrentUrl}: ${linkExtractionError.message}`);
+                    links = [];
+                }
                 console.log(`[DEBUG] Links extracted from ${normalizedCurrentUrl}. Found ${links.length} links.`);
 
                 // Generate secure filename
@@ -515,29 +516,35 @@ async function performScraping(req, res) {
                 console.log(`Page for ${normalizedCurrentUrl} closed.`);
 
                 // Process extracted links
+                console.log(`[DEBUG] Processing ${links.length} extracted links from ${normalizedCurrentUrl}`);
+                let linksAdded = 0;
+                
                 links.forEach(link => {
-                    if (visitedUrls.size < MAX_PAGES_TO_CRAWL) {
-                        const normalizedLink = normalizeUrl(link);
-                        const normalizedLinkPath = new URL(normalizedLink).pathname.toLowerCase();
-                        const normalizedLinkHostname = new URL(normalizedLink).hostname.toLowerCase();
-                        let isExcludedLink = false;
-                        
-                        for (const keyword of EXCLUDED_URL_KEYWORDS) {
-                            if (normalizedLinkPath.includes(keyword) || normalizedLinkHostname.includes(keyword)) {
-                                isExcludedLink = true;
-                                break;
+                    try {
+                        if (visitedUrls.size < MAX_PAGES_TO_CRAWL) {
+                            const normalizedLink = normalizeUrl(link);
+                            const normalizedLinkPath = new URL(normalizedLink).pathname.toLowerCase();
+                            const normalizedLinkHostname = new URL(normalizedLink).hostname.toLowerCase();
+                            let isExcludedLink = false;
+                            
+                            for (const keyword of EXCLUDED_URL_KEYWORDS) {
+                                if (normalizedLinkPath.includes(keyword) || normalizedLinkHostname.includes(keyword)) {
+                                    isExcludedLink = true;
+                                    break;
+                                }
+                            }
+
+                            if (!visitedUrls.has(normalizedLink) && !pagesToVisit.includes(normalizedLink) && !isExcludedLink) {
+                                pagesToVisit.push(normalizedLink);
+                                linksAdded++;
                             }
                         }
-
-                        if (!visitedUrls.has(normalizedLink) && !pagesToVisit.includes(normalizedLink) && !isExcludedLink) {
-                            pagesToVisit.push(normalizedLink);
-                        } else if (isExcludedLink) {
-                            console.log(`Not adding excluded link to queue: ${normalizedLink} (contains policy/terms keyword).`);
-                        }
-                    } else {
-                        console.log('Max pages to crawl reached. Stopping discovery of new URLs.');
+                    } catch (linkError) {
+                        console.warn(`Error processing link ${link}: ${linkError.message}`);
                     }
                 });
+                
+                console.log(`Added ${linksAdded} new links to queue. Queue: ${pagesToVisit.length}, Visited: ${visitedUrls.size}`);
 
             } catch (pageError) {
                 console.error(`Error processing page ${normalizedCurrentUrl}:`, pageError.message);
@@ -631,6 +638,69 @@ function validateDomain(req) {
 }
 
 /**
+ * Downloads files from GCS and creates a ZIP
+ * @param {object} req The HTTP request object
+ * @param {object} res The HTTP response object
+ */
+async function downloadFilesAsZip(req, res) {
+    try {
+        const { files, type } = req.body;
+        
+        if (!files || !Array.isArray(files) || files.length === 0) {
+            return res.status(400).json(createSafeError('No files provided'));
+        }
+        
+        if (!type || !['html', 'screenshots'].includes(type)) {
+            return res.status(400).json(createSafeError('Invalid type. Must be "html" or "screenshots"'));
+        }
+        
+        console.log(`Creating ZIP for ${files.length} ${type} files`);
+        
+        const zip = new JSZip();
+        const folder = zip.folder(type === 'html' ? 'html-files' : 'screenshots');
+        
+        // Download each file from GCS and add to ZIP
+        for (const file of files) {
+            try {
+                const fileName = file.name;
+                const gcsPath = type === 'html' ? `html/${fileName}` : `screenshots/${fileName}`;
+                
+                const gcsFile = storage.bucket(BUCKET_NAME).file(gcsPath);
+                const [fileContent] = await gcsFile.download();
+                
+                folder.file(fileName, fileContent);
+            } catch (fileError) {
+                console.error(`Failed to download ${file.name}:`, fileError.message);
+                // Continue with other files
+            }
+        }
+        
+        // Generate ZIP buffer
+        const zipBuffer = await zip.generateAsync({
+            type: 'nodebuffer',
+            compression: 'DEFLATE',
+            compressionOptions: { level: 6 }
+        });
+        
+        console.log(`ZIP generated, size: ${zipBuffer.length} bytes`);
+        
+        // Send ZIP file as response
+        const fileName = type === 'html' ? 'html-files.zip' : 'screenshots.zip';
+        res.set({
+            'Content-Type': 'application/zip',
+            'Content-Disposition': `attachment; filename="${fileName}"`,
+            'Content-Length': zipBuffer.length
+        });
+        
+        res.send(zipBuffer);
+        
+    } catch (error) {
+        console.error('ZIP download error:', error);
+        res.status(500).json(createSafeError('Failed to create ZIP file'));
+    }
+}
+
+/**
  * Entry point for the Cloud Function with timeout protection.
  * This function will be triggered by an HTTP POST request from your frontend.
  *
@@ -656,6 +726,11 @@ exports.scrapeAndScreenshot = async (req, res) => {
         res.set('Access-Control-Allow-Headers', 'Content-Type');
         res.set('Access-Control-Max-Age', '3600');
         return res.status(204).send('');
+    }
+
+    // Check if this is a ZIP download request
+    if (req.body && req.body.action === 'download-zip') {
+        return downloadFilesAsZip(req, res);
     }
 
     // Global timeout protection

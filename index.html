@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Website Subpage Scraper & Screenshotter</title>
+    <title>Website Auto Screenshot-er</title>
     <!-- Tailwind CSS CDN for easy styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Firebase SDKs (for local testing, actual Firebase features are removed from backend) -->
@@ -60,7 +60,6 @@
                 }
             }
             isAuthReady = true; 
-            document.getElementById('currentUserIdDisplay').textContent = `Your User ID: ${currentUserId}`;
             document.getElementById('userIdInput').value = currentUserId; 
             document.getElementById('scrapeForm').classList.remove('hidden'); 
         });
@@ -71,7 +70,6 @@
 
             const messageBox = document.getElementById('messageBox');
             const outputContentDiv = document.getElementById('outputContent');
-            const currentJobIdDisplay = document.getElementById('currentJobIdDisplay');
             const jobResultsSection = document.getElementById('jobResultsSection');
 
             if (!isAuthReady || !currentUserId) {
@@ -80,22 +78,20 @@
             }
 
             let urlInput = document.getElementById('url').value.trim(); 
-            const emailInput = document.getElementById('email').value;
             const userIdInput = document.getElementById('userIdInput').value; // Still send userId, though backend won't use it in this version
 
             if (!urlInput.startsWith('http://') && !urlInput.startsWith('https://')) {
                 urlInput = 'https://' + urlInput; 
             }
 
-            if (!urlInput || !emailInput) { // userId is not validated in this frontend for pre-Firebase backend
-                showMessage('Please enter a valid website URL and your email.', 'error');
+            if (!urlInput) {
+                showMessage('Please enter a valid website URL.', 'error');
                 return;
             }
 
             messageBox.style.display = 'none';
             messageBox.className = 'message-box';
             outputContentDiv.innerHTML = '';
-            currentJobIdDisplay.textContent = 'N/A';
             jobResultsSection.classList.add('hidden'); 
 
             showMessage('Processing your request...', 'success');
@@ -106,7 +102,7 @@
                 const response = await fetch(backendApiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: urlInput, email: emailInput, userId: userIdInput }) // userId still sent, but ignored by backend
+                    body: JSON.stringify({ url: urlInput, userId: userIdInput }) // userId still sent, but ignored by backend
                 });
 
                 const result = await response.json();
@@ -114,21 +110,30 @@
                 if (response.ok) { 
                     showMessage(result.message || 'Request submitted successfully!', 'success');
                     jobResultsSection.classList.remove('hidden'); // Show results section
-                    currentJobIdDisplay.textContent = 'N/A (No Job ID from pre-Firebase backend)'; // Indicate no job ID
+
+                    // Display page count
+                    const pagesFound = result.pagesProcessed || 0;
+                    outputContentDiv.innerHTML = `<p class="font-semibold mb-4 text-gray-800">Found and processed ${pagesFound} pages</p>`;
 
                     // Display results from the final JSON response
                     if (result.htmlFiles && result.htmlFiles.length > 0) {
-                        outputContentDiv.innerHTML += '<h3 class="font-bold text-gray-700 mt-4 mb-2">HTML Files:</h3>';
+                        outputContentDiv.innerHTML += '<div class="mb-6"><h3 class="font-bold text-gray-700 mt-4 mb-2">HTML Files:</h3>';
                         result.htmlFiles.forEach(file => {
                             outputContentDiv.innerHTML += `<a href="${file.url}" target="_blank" class="block text-blue-600 hover:underline">${file.name}</a>`;
                         });
+                        outputContentDiv.innerHTML += `<button onclick="downloadAllHTML()" class="mt-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Download All HTML Files (ZIP)</button></div>`;
                     }
                     if (result.screenshotFiles && result.screenshotFiles.length > 0) {
-                        outputContentDiv.innerHTML += '<h3 class="font-bold text-gray-700 mt-4 mb-2">Screenshots:</h3>';
+                        outputContentDiv.innerHTML += '<div><h3 class="font-bold text-gray-700 mt-4 mb-2">Screenshots:</h3>';
                         result.screenshotFiles.forEach(file => {
                             outputContentDiv.innerHTML += `<a href="${file.url}" target="_blank" class="block text-blue-600 hover:underline">${file.name}</a>`;
                         });
+                        outputContentDiv.innerHTML += `<button onclick="downloadAllScreenshots()" class="mt-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Download All Screenshots (ZIP)</button></div>`;
                     }
+
+                    // Store files globally for download functions
+                    window.currentHtmlFiles = result.htmlFiles || [];
+                    window.currentScreenshotFiles = result.screenshotFiles || [];
                 } else {
                     showMessage(result.error || 'An error occurred while processing your request.', 'error');
                 }
@@ -146,6 +151,93 @@
             messageBox.style.display = 'block';
         }
 
+        // Bulk download functions
+        async function downloadAllHTML() {
+            if (!window.currentHtmlFiles || window.currentHtmlFiles.length === 0) {
+                alert('No HTML files to download');
+                return;
+            }
+            
+            showMessage('Preparing HTML files for download...', 'success');
+            
+            try {
+                const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot';
+                
+                const response = await fetch(backendApiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'download-zip',
+                        type: 'html',
+                        files: window.currentHtmlFiles
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const zipBlob = await response.blob();
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(zipBlob);
+                link.download = 'html-files.zip';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(link.href);
+                
+                showMessage('HTML files downloaded successfully!', 'success');
+            } catch (error) {
+                console.error('Download failed:', error);
+                showMessage(`Download failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function downloadAllScreenshots() {
+            if (!window.currentScreenshotFiles || window.currentScreenshotFiles.length === 0) {
+                alert('No screenshot files to download');
+                return;
+            }
+            
+            showMessage('Preparing screenshots for download...', 'success');
+            
+            try {
+                const backendApiUrl = 'https://us-central1-screenshots-app-459900.cloudfunctions.net/scrapeAndScreenshot';
+                
+                const response = await fetch(backendApiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'download-zip',
+                        type: 'screenshots',
+                        files: window.currentScreenshotFiles
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const zipBlob = await response.blob();
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(zipBlob);
+                link.download = 'screenshots.zip';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(link.href);
+                
+                showMessage('Screenshots downloaded successfully!', 'success');
+            } catch (error) {
+                console.error('Download failed:', error);
+                showMessage(`Download failed: ${error.message}`, 'error');
+            }
+        }
+
+        // Make download functions globally accessible
+        window.downloadAllHTML = downloadAllHTML;
+        window.downloadAllScreenshots = downloadAllScreenshots;
+        
         window.app = app;
         window.auth = auth;
         window.db = db;
@@ -196,12 +288,11 @@
 </head>
 <body>
     <div class="container">
-        <h1 class="text-3xl font-bold text-center text-gray-800 mb-4">Website Subpage Scraper</h1>
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-4">Website Auto Screenshot-er</h1>
         <p class="text-center text-gray-600 mb-6">
-            Enter a website URL and your email. We'll crawl the site, take screenshots of subpages, and show results in real-time.
+            Enter a website URL. We'll crawl the site, take screenshots of subpages, and show results in real-time.
         </p>
 
-        <p id="currentUserIdDisplay" class="text-sm text-gray-500 text-center mb-4">Initializing user...</p>
 
         <form id="scrapeForm" class="space-y-4 hidden"> <!-- Hidden until Firebase auth is ready -->
             <input type="hidden" id="userIdInput" name="userId"> <!-- Hidden input for userId -->
@@ -216,17 +307,6 @@
                     class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
                 >
             </div>
-            <div>
-                <label for="email" class="block text-sm font-medium text-gray-700 mb-1">Your Email:</label>
-                <input
-                    type="email"
-                    id="email"
-                    name="email"
-                    placeholder="e.g., yourname@example.com"
-                    required
-                    class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                >
-            </div>
             <button
                 type="submit"
                 class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
@@ -239,7 +319,6 @@
 
         <div id="jobResultsSection" class="mt-8 p-4 bg-gray-50 rounded-lg border border-gray-200 hidden">
             <h2 class="text-xl font-semibold mb-3 text-gray-800">Job Results:</h2>
-            <p class="text-sm text-gray-600 mb-4">Job ID: <span id="currentJobIdDisplay" class="font-mono">N/A</span></p>
             <div id="outputContent" class="space-y-4 max-h-96 overflow-y-auto">
                 <!-- Results will appear here dynamically -->
                 <p class="text-gray-500 text-sm">Results will load here in real-time as pages are processed.</p>
