@@ -135,6 +135,13 @@
                     // Store files globally for download functions
                     window.currentHtmlFiles = result.htmlFiles || [];
                     window.currentScreenshotFiles = result.screenshotFiles || [];
+                    
+                    // Force height update after results are displayed
+                    setTimeout(() => {
+                        if (window.sendHeightWithRetry) {
+                            window.sendHeightWithRetry();
+                        }
+                    }, 300);
                 } else {
                     showMessage(result.error || 'An error occurred while processing your request.', 'error');
                 }
@@ -150,6 +157,13 @@
             messageBox.classList.add(type);
             messageBox.textContent = text;
             messageBox.style.display = 'block';
+            
+            // Trigger height update when message is shown
+            setTimeout(() => {
+                if (window.sendHeightToParent) {
+                    window.sendHeightToParent();
+                }
+            }, 200);
         }
 
         // Bulk download functions
@@ -247,33 +261,58 @@
 
         // Auto-resize iframe functionality for WordPress embedding
         function sendHeightToParent() {
-            const height = Math.max(
-                document.body.scrollHeight,
-                document.body.offsetHeight,
-                document.documentElement.clientHeight,
-                document.documentElement.scrollHeight,
-                document.documentElement.offsetHeight
-            );
-            
-            if (window.parent !== window) {
-                window.parent.postMessage({
-                    type: 'resize',
-                    height: height
-                }, '*');
-            }
+            // Wait for DOM to be ready
+            setTimeout(() => {
+                const heights = [
+                    document.body.scrollHeight,
+                    document.body.offsetHeight,
+                    document.documentElement.clientHeight,
+                    document.documentElement.scrollHeight,
+                    document.documentElement.offsetHeight
+                ];
+                
+                const height = Math.max(...heights) + 50; // Add 50px buffer
+                
+                console.log('Sending height to parent:', height, 'Heights:', heights);
+                
+                if (window.parent !== window) {
+                    window.parent.postMessage({
+                        type: 'resize',
+                        height: height
+                    }, '*');
+                }
+            }, 100);
         }
 
-        // Send height on load and content changes
-        window.addEventListener('load', sendHeightToParent);
+        // Enhanced height detection with retries
+        function sendHeightWithRetry() {
+            sendHeightToParent();
+            // Send multiple times to ensure it gets through
+            setTimeout(sendHeightToParent, 500);
+            setTimeout(sendHeightToParent, 1000);
+        }
+
+        // Send height on various events
+        window.addEventListener('load', sendHeightWithRetry);
         window.addEventListener('resize', sendHeightToParent);
+        document.addEventListener('DOMContentLoaded', sendHeightWithRetry);
+
+        // Make height functions globally accessible
+        window.sendHeightToParent = sendHeightToParent;
+        window.sendHeightWithRetry = sendHeightWithRetry;
 
         // Send height when results are displayed (observe changes to output content)
-        const observer = new MutationObserver(sendHeightToParent);
+        const observer = new MutationObserver(() => {
+            console.log('Content changed, updating height');
+            sendHeightWithRetry();
+        });
+        
         const outputContent = document.getElementById('outputContent');
         if (outputContent) {
             observer.observe(outputContent, {
                 childList: true,
-                subtree: true
+                subtree: true,
+                attributes: true
             });
         }
 
@@ -282,13 +321,25 @@
         if (jobResultsSection) {
             observer.observe(jobResultsSection, {
                 attributes: true,
-                attributeFilter: ['class']
+                attributeFilter: ['class'],
+                childList: true,
+                subtree: true
             });
         }
 
-        // Call it initially and periodically for any missed changes
-        sendHeightToParent();
-        setInterval(sendHeightToParent, 2000);
+        // Also observe the message box
+        const messageBox = document.getElementById('messageBox');
+        if (messageBox) {
+            observer.observe(messageBox, {
+                attributes: true,
+                attributeFilter: ['style', 'class'],
+                childList: true
+            });
+        }
+
+        // Call it initially and more frequently
+        sendHeightWithRetry();
+        setInterval(sendHeightToParent, 1000);
     </script>
     <style>
         /* Set up CSS variables for consistent theming */
