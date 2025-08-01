@@ -268,7 +268,7 @@
         }
 
         .gradient-text {
-            background: linear-gradient(45deg, #000000, #333333);
+            background: linear-gradient(45deg, #000000, #444444, #666666);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -276,6 +276,15 @@
             font-size: 2.5em;
             font-weight: 600;
             margin-bottom: 0.5em;
+            /* Fallback for browsers that don't support background-clip */
+            color: #000000;
+        }
+        
+        /* Enhanced gradient support */
+        @supports (background-clip: text) or (-webkit-background-clip: text) {
+            .gradient-text {
+                color: transparent;
+            }
         }
 
         .float-animation {
