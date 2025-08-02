@@ -260,9 +260,17 @@
         window.appId = appId;
 
         // Auto-resize iframe functionality for WordPress embedding
+        let lastSentHeight = 0;
+        let resizeTimeout = null;
+        
         function sendHeightToParent() {
-            // Wait for DOM to be ready
-            setTimeout(() => {
+            // Clear any pending resize
+            if (resizeTimeout) {
+                clearTimeout(resizeTimeout);
+            }
+            
+            // Debounce the resize operation
+            resizeTimeout = setTimeout(() => {
                 const heights = [
                     document.body.scrollHeight,
                     document.body.offsetHeight,
@@ -273,22 +281,25 @@
                 
                 const height = Math.max(...heights) + 50; // Add 50px buffer
                 
-                console.log('Sending height to parent:', height, 'Heights:', heights);
-                
-                if (window.parent !== window) {
-                    window.parent.postMessage({
-                        type: 'resize',
-                        height: height
-                    }, '*');
+                // Only send if height changed by more than 10px to prevent feedback loops
+                if (Math.abs(height - lastSentHeight) > 10) {
+                    console.log('Sending height to parent:', height, 'Heights:', heights, 'Previous:', lastSentHeight);
+                    
+                    if (window.parent !== window) {
+                        window.parent.postMessage({
+                            type: 'resize',
+                            height: height
+                        }, '*');
+                        lastSentHeight = height;
+                    }
                 }
-            }, 100);
+            }, 200);
         }
 
-        // Enhanced height detection with retries
+        // Enhanced height detection with retries (only for major changes)
         function sendHeightWithRetry() {
             sendHeightToParent();
-            // Send multiple times to ensure it gets through
-            setTimeout(sendHeightToParent, 500);
+            // Single retry after a longer delay
             setTimeout(sendHeightToParent, 1000);
         }
 
@@ -337,9 +348,9 @@
             });
         }
 
-        // Call it initially and more frequently
+        // Call it initially and periodically (less frequently to prevent loops)
         sendHeightWithRetry();
-        setInterval(sendHeightToParent, 1000);
+        setInterval(sendHeightToParent, 3000); // Reduced frequency to every 3 seconds
     </script>
     <style>
         /* Set up CSS variables for consistent theming */
