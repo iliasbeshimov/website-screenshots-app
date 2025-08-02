@@ -136,12 +136,7 @@
                     window.currentHtmlFiles = result.htmlFiles || [];
                     window.currentScreenshotFiles = result.screenshotFiles || [];
                     
-                    // Force height update after results are displayed
-                    setTimeout(() => {
-                        if (window.sendHeightWithRetry) {
-                            window.sendHeightWithRetry();
-                        }
-                    }, 300);
+                    // Height update disabled to prevent infinite resize loops
                 } else {
                     showMessage(result.error || 'An error occurred while processing your request.', 'error');
                 }
@@ -158,12 +153,7 @@
             messageBox.textContent = text;
             messageBox.style.display = 'block';
             
-            // Trigger height update when message is shown
-            setTimeout(() => {
-                if (window.sendHeightToParent) {
-                    window.sendHeightToParent();
-                }
-            }, 200);
+            // Height update disabled to prevent infinite resize loops
         }
 
         // Bulk download functions
@@ -259,86 +249,9 @@
         window.currentUserId = currentUserId; 
         window.appId = appId;
 
-        // Auto-resize iframe functionality for WordPress embedding
-        let lastSentHeight = 0;
-        let resizeTimeout = null;
-        
-        function sendHeightToParent() {
-            // Clear any pending resize
-            if (resizeTimeout) {
-                clearTimeout(resizeTimeout);
-            }
-            
-            // Debounce the resize operation
-            resizeTimeout = setTimeout(() => {
-                const heights = [
-                    document.body.scrollHeight,
-                    document.body.offsetHeight,
-                    document.documentElement.clientHeight,
-                    document.documentElement.scrollHeight,
-                    document.documentElement.offsetHeight
-                ];
-                
-                const height = Math.max(...heights) + 50; // Add 50px buffer
-                
-                // Only send if height changed by more than 50px to prevent feedback loops
-                if (Math.abs(height - lastSentHeight) > 50) {
-                    console.log('Sending height to parent:', height, 'Heights:', heights, 'Previous:', lastSentHeight);
-                    
-                    if (window.parent !== window) {
-                        window.parent.postMessage({
-                            type: 'resize',
-                            height: height
-                        }, '*');
-                        lastSentHeight = height;
-                    }
-                }
-            }, 200);
-        }
-
-        // Enhanced height detection with retries (only for major changes)
-        function sendHeightWithRetry() {
-            sendHeightToParent();
-            // Single retry after a longer delay
-            setTimeout(sendHeightToParent, 1000);
-        }
-
-        // Send height on various events
-        window.addEventListener('load', sendHeightWithRetry);
-        window.addEventListener('resize', sendHeightToParent);
-        document.addEventListener('DOMContentLoaded', sendHeightWithRetry);
-
-        // Make height functions globally accessible
-        window.sendHeightToParent = sendHeightToParent;
-        window.sendHeightWithRetry = sendHeightWithRetry;
-
-        // Send height when results are displayed (observe only major changes)
-        const observer = new MutationObserver((mutations) => {
-            // Only trigger on significant changes (added/removed nodes)
-            const hasSignificantChange = mutations.some(mutation => 
-                mutation.type === 'childList' && 
-                (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0)
-            );
-            
-            if (hasSignificantChange) {
-                console.log('Significant content changed, updating height');
-                sendHeightToParent();
-            }
-        });
-        
-        // Only observe the results section for major content changes
-        const jobResultsSection = document.getElementById('jobResultsSection');
-        if (jobResultsSection) {
-            observer.observe(jobResultsSection, {
-                childList: true,
-                attributes: true,
-                attributeFilter: ['class'] // Only watch for show/hide
-            });
-        }
-
-        // Call it initially only - no periodic checks to prevent loops
-        sendHeightWithRetry();
-        // Removed setInterval to stop continuous resizing
+        // Auto-resize iframe functionality DISABLED to prevent infinite loops
+        // The iframe will use a fixed height with scrolling instead
+        console.log('Auto-resize functionality disabled to prevent infinite resize loops');
     </script>
     <style>
         /* Set up CSS variables for consistent theming */
