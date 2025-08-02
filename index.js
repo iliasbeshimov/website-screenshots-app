@@ -286,7 +286,14 @@ async function performScraping(req, res) {
     try {
         console.log('[DEBUG] Attempting to launch Puppeteer browser...');
         browser = await puppeteer.launch({
-            args: [...chromium.args, '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage'],
+            args: [
+                ...chromium.args, 
+                '--disable-gpu', 
+                '--no-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=VizDisplayCompositor'
+            ],
             defaultViewport: { width: 1920, height: 1080 },
             executablePath: await chromium.executablePath(),
             headless: chromium.headless,
@@ -336,6 +343,29 @@ async function performScraping(req, res) {
                 console.log(`[DEBUG] Creating new page for ${normalizedCurrentUrl}...`);
                 page = await browser.newPage();
                 page.setDefaultNavigationTimeout(120000);
+                
+                // Set realistic user agent and headers to bypass bot detection
+                await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+                await page.setExtraHTTPHeaders({
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                });
+                
+                // Additional stealth techniques
+                await page.evaluateOnNewDocument(() => {
+                    Object.defineProperty(navigator, 'webdriver', {
+                        get: () => undefined,
+                    });
+                    
+                    // Remove automation indicators
+                    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+                    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+                    delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+                });
 
                 // Enhanced request interception for security
                 await page.setRequestInterception(true);
