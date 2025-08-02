@@ -136,7 +136,8 @@
                     window.currentHtmlFiles = result.htmlFiles || [];
                     window.currentScreenshotFiles = result.screenshotFiles || [];
                     
-                    // Height update disabled to prevent infinite resize loops
+                    // Trigger one-time iframe resize now that results are displayed
+                    resizeIframeOnce();
                 } else {
                     showMessage(result.error || 'An error occurred while processing your request.', 'error');
                 }
@@ -249,9 +250,33 @@
         window.currentUserId = currentUserId; 
         window.appId = appId;
 
-        // Auto-resize iframe functionality DISABLED to prevent infinite loops
-        // The iframe will use a fixed height with scrolling instead
-        console.log('Auto-resize functionality disabled to prevent infinite resize loops');
+        // One-time iframe resize functionality - only resize when results are shown
+        let hasResized = false;
+        
+        function resizeIframeOnce() {
+            if (hasResized) {
+                console.log('Already resized, skipping');
+                return;
+            }
+            
+            // Wait for content to settle
+            setTimeout(() => {
+                const height = Math.max(
+                    document.body.scrollHeight,
+                    document.documentElement.scrollHeight
+                ) + 100; // Add buffer
+                
+                console.log('One-time iframe resize to:', height);
+                
+                if (window.parent !== window) {
+                    window.parent.postMessage({
+                        type: 'resize',
+                        height: height
+                    }, '*');
+                    hasResized = true; // Mark as resized to prevent future resizes
+                }
+            }, 500);
+        }
     </script>
     <style>
         /* Set up CSS variables for consistent theming */
