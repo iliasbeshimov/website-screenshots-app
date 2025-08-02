@@ -281,8 +281,8 @@
                 
                 const height = Math.max(...heights) + 50; // Add 50px buffer
                 
-                // Only send if height changed by more than 10px to prevent feedback loops
-                if (Math.abs(height - lastSentHeight) > 10) {
+                // Only send if height changed by more than 50px to prevent feedback loops
+                if (Math.abs(height - lastSentHeight) > 50) {
                     console.log('Sending height to parent:', height, 'Heights:', heights, 'Previous:', lastSentHeight);
                     
                     if (window.parent !== window) {
@@ -312,45 +312,33 @@
         window.sendHeightToParent = sendHeightToParent;
         window.sendHeightWithRetry = sendHeightWithRetry;
 
-        // Send height when results are displayed (observe changes to output content)
-        const observer = new MutationObserver(() => {
-            console.log('Content changed, updating height');
-            sendHeightWithRetry();
+        // Send height when results are displayed (observe only major changes)
+        const observer = new MutationObserver((mutations) => {
+            // Only trigger on significant changes (added/removed nodes)
+            const hasSignificantChange = mutations.some(mutation => 
+                mutation.type === 'childList' && 
+                (mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0)
+            );
+            
+            if (hasSignificantChange) {
+                console.log('Significant content changed, updating height');
+                sendHeightToParent();
+            }
         });
         
-        const outputContent = document.getElementById('outputContent');
-        if (outputContent) {
-            observer.observe(outputContent, {
-                childList: true,
-                subtree: true,
-                attributes: true
-            });
-        }
-
-        // Also observe the job results section for when it becomes visible
+        // Only observe the results section for major content changes
         const jobResultsSection = document.getElementById('jobResultsSection');
         if (jobResultsSection) {
             observer.observe(jobResultsSection, {
-                attributes: true,
-                attributeFilter: ['class'],
                 childList: true,
-                subtree: true
-            });
-        }
-
-        // Also observe the message box
-        const messageBox = document.getElementById('messageBox');
-        if (messageBox) {
-            observer.observe(messageBox, {
                 attributes: true,
-                attributeFilter: ['style', 'class'],
-                childList: true
+                attributeFilter: ['class'] // Only watch for show/hide
             });
         }
 
-        // Call it initially and periodically (less frequently to prevent loops)
+        // Call it initially only - no periodic checks to prevent loops
         sendHeightWithRetry();
-        setInterval(sendHeightToParent, 3000); // Reduced frequency to every 3 seconds
+        // Removed setInterval to stop continuous resizing
     </script>
     <style>
         /* Set up CSS variables for consistent theming */
